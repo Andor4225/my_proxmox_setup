@@ -4,6 +4,21 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-08-13
+
+**Repo put under version control and pushed to a private GitHub backup — `github.com/Andor4225/my_proxmox_setup` — after a two-pass secret/PII audit. First commit `3278756`, 47 files.**
+
+- **Goal:** a cloud-backed source of truth so the lab survives a machine loss, with no secrets or personal info committed even though the repo is private.
+- **Excluded (`.gitignore`):** `.env` (the only home of the Proxmox API token + a Cloudflare tunnel token), private-key material, `node_modules/`, `dist/`, local tooling state (`.claude/`, `.omc/`), `ClaudeResumeLast.txt`, `*.bak*`, `id_*.pub`, and the two non-lab business/career docs (`dfwagentops.md`, `linkedin-post-brief.md`). Added `.env.example` (placeholder shape) and a repo-root `README.md`.
+- **Sanitized:** the `mistag27@` Tailscale-account handle scrubbed from CLAUDE.md + AGENTS.md; the 6 now-dangling `dfwagentops.md` doc-map/tree references in both files replaced with "kept in local tree, not committed" notes. Infrastructure identifiers (internal 192.168.x IPs, Tailscale CGNAT 100.x, hostnames, SSH **public**-key fingerprints) deliberately **kept** — non-routable and needed to rebuild from the backup.
+- **`.gitattributes`** forces LF on all tracked text so the Linux-bound shell scripts don't get CRLF-corrupted when cloned/checked out.
+- **Private commit identity:** repo-scoped `user.name/email` set to `Andor4225 <Andor4225@users.noreply.github.com>` (LOCAL config only — the global `Gavin Walsh <mistag27@…>` identity is untouched), so no real email enters commit history.
+- **Two independent pre-push audits** (a content pattern-sweep + an independent security-reviewer subagent) both returned CLEAR: no hardcoded token, no private keys, no cloud/Cloudflare secret, no real PII. Only accepted lab content flagged (deliberately-weak `ctf/`+`fae/` challenge creds, `FLAG{}` strings, the public jwt.io demo JWT, fake `security@megacorp.io`). Codex was not used for this pass — its Windows sandbox runner is still broken.
+- **Post-push verify:** remote HEAD == local, 47 files, confirmed no excluded/secret path present on the remote.
+- **Auth note:** the `gh` CLI login had expired, but `git push` works through Git Credential Manager. Pushes are also gated by the session's auto-mode classifier, so they must be run interactively (`! git push`) or via an added `Bash(git push:*)` permission rule.
+
+---
+
 ## 2026-07-28
 
 **CTF lab rebuilt on CTIDs 211–215 (unprivileged, static IPs) alongside the FAE labs. Kali SSH key added to the host. Three flag-breaking bugs found by deploying and testing — all three were documented in `lxc-gotchas.md` and none had ever actually been fixed in the scripts.**
