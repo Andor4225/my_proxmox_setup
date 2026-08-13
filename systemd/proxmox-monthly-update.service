@@ -1,0 +1,54 @@
+[Unit]
+Description=Automated Proxmox VE bi-monthly upgrade
+Documentation=file:///usr/local/sbin/proxmox-monthly-update.sh
+# Fail LOUDLY if the script is missing — Assert* makes a missing dependency
+# show up as a failed unit, while Condition* would silently skip the run and
+# the timer would mark the firing as "successful" via Persistent=true.
+AssertPathExists=/usr/local/sbin/proxmox-monthly-update.sh
+AssertFileIsExecutable=/usr/local/sbin/proxmox-monthly-update.sh
+# Pre-flight requires Tailscale (subnet route to LAN), Samba (smbstatus gate),
+# the Proxmox cluster (pct/qm/pvesh), and working outbound network/DNS for apt.
+# Order after all of them so a slow boot doesn't false-fail us. `Wants=` is the
+# soft equivalent so the unit still tries to start even if one of those is
+# degraded — pre-flight will catch it. network-online.target matters for the
+# Persistent=true replay path: if the host was off at the scheduled firing and
+# boots later, the replay races DHCP/DNS without it.
+After=multi-user.target network-online.target tailscaled.service smbd.service pve-cluster.service
+Wants=network-online.target tailscaled.service smbd.service pve-cluster.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/proxmox-monthly-update.sh
+# 90-minute hard cap — enough for a full kernel upgrade with initramfs regen
+# and grub-mkconfig on this hardware. Beyond this, something is genuinely
+# stuck and we want systemd to fail the unit loudly rather than block forever.
+# The script itself does NOT wrap apt in `timeout` so this is the only cap.
+#
+# WARNING: if this fires, systemd will start killing the cgroup. We tune
+# below to give dpkg the best chance of finishing cleanly anyway:
+#   * KillSignal=SIGINT — dpkg handles SIGINT more gracefully than SIGTERM
+#     during postinst; debconf and dpkg itself trap INT and clean up.
+#   * TimeoutStopSec=1800 — 30-min grace after SIGINT before the final
+#     SIGKILL. Long enough for a stalled initramfs/grub-mkconfig to finish
+#     responding to the interrupt.
+# Even with the above, do not assume a fired TimeoutStartSec leaves the host
+# clean. If this triggers, expect to run `dpkg --configure -a` on next boot.
+# Pick 5400 to make the fire path extremely unlikely; do NOT shorten without
+# reason.
+TimeoutStartSec=5400
+KillSignal=SIGINT
+TimeoutStopSec=1800
+# Don't auto-restart on failure — a partially-applied apt full-upgrade should
+# be manually triaged, not retried into deeper inconsistency.
+Restart=no
+# Journal capture is the systemd-native log; the script also tees to
+# /var/log/proxmox-monthly-update.log for plain-file archival.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=proxmox-monthly-update
+# Needs apt, pct/qm snapshots, shutdown — root only.
+User=root
+
+# Note: this unit has no [Install] section because it is triggered by the
+# timer unit, not enabled directly. Enabling the timer is what activates
+# the automation.

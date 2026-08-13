@@ -1,0 +1,16 @@
+# Keep line endings LF in the repo. These scripts run on Linux (Proxmox host and
+# inside LXC containers) — CRLF would break shebangs and here-docs. Authoring on
+# Windows must not introduce CRLF into tracked files.
+* text=auto eol=lf
+
+# Be explicit for the file types that would actually break with CRLF.
+*.sh   text eol=lf
+*.ts   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.service text eol=lf
+*.timer   text eol=lf
+*.txt  text eol=lf
+
+# If any PowerShell is ever added, it stays CRLF.
+*.ps1  text eol=crlf

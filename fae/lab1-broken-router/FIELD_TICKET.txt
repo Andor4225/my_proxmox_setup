@@ -1,0 +1,119 @@
+================================================================================
+                 NORTHSTAR LOGISTICS - IT SERVICE DESK
+                        FIELD DISPATCH TICKET
+================================================================================
+
+TICKET ID      : NSL-49206
+OPENED         : 06:52 local
+PRIORITY       : P2 - HIGH (line 3 telemetry stale, no data loss)
+STATUS         : DISPATCHED - awaiting Field Application Engineer
+QUEUE          : Network Operations -> Field Services
+REPORTER       : Marcus Ivey, Shift Lead - Building 4, Line 3
+CONTACT        : ext. 4438 / mivey@northstar-logistics.example
+ASSIGNED TO    : (you)
+
+--------------------------------------------------------------------------------
+AFFECTED SYSTEMS
+--------------------------------------------------------------------------------
+  Container-A   lab-router-a    LAB interface address 10.10.10.10
+  Container-B   lab-router-b    LAB interface address 10.10.10.20
+
+  Both hosts sit on the isolated 10.10.10.0/24 process segment that carries
+  telemetry between the two line controllers. Nothing else lives on that
+  segment.
+
+--------------------------------------------------------------------------------
+HOW TO CONNECT
+--------------------------------------------------------------------------------
+  Management access is UNAFFECTED and is confirmed working from the office
+  network. Connect over the management addresses:
+
+      ssh fae@192.168.10.201        (Container-A)
+      ssh fae@192.168.10.202        (Container-B)
+
+  Fallback console password is on file with the desk if key auth is not set up
+  for your workstation. Do NOT reconfigure the management interface for any
+  reason - it is the only remote path to these boxes, there is no one on site
+  after 17:00, and if you lose it this ticket becomes a truck roll and Line 3
+  stays down until tomorrow.
+
+--------------------------------------------------------------------------------
+USER COMPLAINT (verbatim from reporter)
+--------------------------------------------------------------------------------
+  "Ping stopped working between the two controllers.
+
+  I came in at 06:00 and the Line 3 status board was still showing yesterday
+  evening's counts. First thing I do when the board goes stale is ping the other
+  controller, and it just sits there. Nothing comes back. Zero received, either
+  direction - I tried it from A to 10.10.10.20 and from B to 10.10.10.10 and
+  they both do the same nothing.
+
+  Here is the part I do not understand. The night shift ran the log pull off
+  Controller A over to Controller B at some point after 22:00 and as far as I
+  can tell that finished fine - the file is sitting on B this morning with last
+  night's timestamp on it. So the two of them were still talking at some point
+  overnight, but now I cannot get a ping through at all. Unless somebody copied
+  that file by hand, which I doubt at 22:00.
+
+  I also want to say that at one point this morning I thought I got a ping to go
+  through one way and not the other, but I had four windows open and I have been
+  up since 04:00, so do not take my word on that. Test it yourself.
+
+  Both boxes are up. I can log into both of them from my desk with no trouble at
+  all, so it is not a dead box. It is just the plant segment between the two of
+  them."
+
+--------------------------------------------------------------------------------
+SYMPTOMS OBSERVED / TRIAGE ALREADY PERFORMED BY REPORTER
+--------------------------------------------------------------------------------
+  * Ping A -> 10.10.10.20 : nothing returned.
+  * Ping B -> 10.10.10.10 : nothing returned.
+  * Reporter's claim that a ping succeeded in ONE direction this morning is
+    explicitly unreliable (his words). Do not build on it - but do not dismiss
+    it either. Re-test both directions yourself and record what you actually
+    observe, in writing, at every stage.
+  * Reporter states a file transfer from Container-A to Container-B completed
+    successfully overnight. Timestamp on the file supports this. He cannot say
+    whether ping was working at that time.
+  * Both hosts remain fully reachable over management the entire time.
+  * Reporter rebooted BOTH containers at 06:30. No change - the problem came
+    back exactly the same after the reboot.
+  * Reporter confirmed the LAB interface shows as UP on both hosts and says the
+    addresses "match the drawing on the wall."
+  * Reporter re-seated the virtual NIC assignment in the hypervisor UI. No
+    change.
+  * Facilities did a UPS/PDU firmware update in that cabinet on Tuesday night
+    and there was a brief power blip. That is two nights ago and the segment
+    worked all day Wednesday, but it is the only recorded work in the area, so
+    it is in the ticket. Weigh it accordingly.
+  * No approved change window last night. No one admits to touching either box.
+    (Treat that claim with the usual amount of trust.)
+
+--------------------------------------------------------------------------------
+SCOPE OF WORK
+--------------------------------------------------------------------------------
+  1. Restore bidirectional reachability between 10.10.10.10 and 10.10.10.20 -
+     and be able to state, with evidence, exactly WHICH kinds of traffic were
+     failing and which were not before you started.
+  2. Verify the fix survives a reboot of both containers. The reporter already
+     rebooted once and the fault came back; if your fix does not outlive a
+     reboot you have not fixed it.
+  3. Document root cause and the exact commands used, for the change record.
+
+  OUT OF SCOPE / HARD CONSTRAINT: the management interface, its address, and
+  the default route must not be modified.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+  Assume the problem may be more than one thing, and that fixing the first thing
+  you find may only change the symptom rather than clear it. The reporter is not
+  a network person; his description reflects what he could see from the surface.
+
+  Work the layers in order, re-test after every single change, and do not
+  conclude that a path is dead because one tool says so. Confirm a negative with
+  a second, independent tool before you act on it.
+
+================================================================================
+                        END OF TICKET  -  NSL-49206
+================================================================================

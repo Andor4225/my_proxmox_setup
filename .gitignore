@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets — NEVER commit. The Proxmox API token lives in .env (and only there).
+# ─────────────────────────────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+credentials
+credentials/
+secrets.*
+*.secret
+*.secrets
+
+# Private keys / certs (public keys and fingerprints are safe; private material is not)
+*.pem
+*.key
+*.ppk
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+*.pfx
+*.p12
+# Public keys dropped into the repo dir for transfer — exclude to be safe
+id_*.pub
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local machine / tooling state — not part of the project, contains local paths
+# ─────────────────────────────────────────────────────────────────────────────
+.claude/
+.omc/
+ClaudeResumeLast.txt
+.vscode/
+.idea/
+*.code-workspace
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build artifacts / dependencies — regenerable, do not commit
+# ─────────────────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+*.js.map
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Working files — backups, temp, and scratch created during edits
+# ─────────────────────────────────────────────────────────────────────────────
+*.bak
+*.bak-*
+*.orig
+*.tmp
+*.swp
+*~
+/tmp/
+scratch/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Excluded per repo scope — business/career docs kept in their own projects,
+# not part of the Proxmox lab (see README "What is intentionally not here").
+# ─────────────────────────────────────────────────────────────────────────────
+dfwagentops.md
+linkedin-post-brief.md

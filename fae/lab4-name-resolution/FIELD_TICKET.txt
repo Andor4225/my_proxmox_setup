@@ -1,0 +1,148 @@
+================================================================================
+                 NORTHSTAR LOGISTICS - IT SERVICE DESK
+                        FIELD DISPATCH TICKET
+================================================================================
+
+TICKET ID      : NSL-51907
+OPENED         : 06:52 local
+PRIORITY       : P2 - HIGH (Building 7 line control degraded, no data loss)
+STATUS         : DISPATCHED - awaiting Field Application Engineer
+QUEUE          : Network Operations -> Field Services
+REPORTER       : Marcus Ibarra, Controls Technician - Building 7
+CONTACT        : ext. 7712 / mibarra@northstar-logistics.example
+ASSIGNED TO    : (you)
+
+--------------------------------------------------------------------------------
+AFFECTED SYSTEMS
+--------------------------------------------------------------------------------
+  Container-A   lab-dns-a    PLANT segment address 10.40.40.10
+                             "Site services box" for Building 7. Per the
+                             as-built binder this box provides the plant
+                             segment's automatic addressing and its name
+                             lookups.
+
+  Container-B   lab-dns-b    PLANT segment address is NOT set by hand - it is
+                             handed out automatically and should land somewhere
+                             in 10.40.40.100 - 10.40.40.150. This is the box the
+                             HMI package runs on.
+
+  Both hosts sit on the isolated 10.40.40.0/24 plant segment. There is no router
+  on that segment, there is no gateway on it, and nothing else is plugged into
+  it. Everything the plant floor needs is either on Container-A or on the
+  segment itself.
+
+  Plant naming convention (copied verbatim from the Building 7 as-built binder,
+  section 4.2 - "Addressing and Naming"):
+
+      controller-a.plant.northstar.example      line controller, Building 7
+      hmi.plant.northstar.example               operator terminal
+      historian.plant.northstar.example         trend / batch archive
+      packer-01.plant.northstar.example         end-of-line packer
+      gateway.plant.northstar.example           reserved, not yet installed
+
+--------------------------------------------------------------------------------
+HOW TO CONNECT
+--------------------------------------------------------------------------------
+  Management access is UNAFFECTED and is confirmed working from the office
+  network. Connect over the management addresses:
+
+      ssh fae@192.168.10.206        (Container-A)
+      ssh fae@192.168.10.207        (Container-B)
+
+  Fallback console password is on file with the desk if key auth is not set up
+  for your workstation. Do NOT reconfigure the management interface, its
+  address, or the default route for any reason. It is the only remote path to
+  these boxes, Building 7 is a badge-escort area, and the last shift that can
+  let anyone in leaves at 15:30. Lose management and this ticket becomes a
+  truck roll and the line stays down until tomorrow.
+
+--------------------------------------------------------------------------------
+USER COMPLAINT (verbatim from reporter)
+--------------------------------------------------------------------------------
+  "The HMI can't reach the controller by name any more.
+
+  Our operator terminal software is configured with the names out of the binder,
+  not with numbers - that is how the integrator set it up and we have never
+  changed it. As of this morning every screen that talks to the controller is
+  showing 'host not found' or just spinning until it gives up. The batch log
+  stopped writing at 05:40.
+
+  Here is the part I don't understand. If I get on Container-B and I type
+  ping 10.40.40.10 with the numbers, it answers straight away, every single
+  packet, no loss. If I type the name instead it does not work. Same box, same
+  cable, same second. So the network is obviously fine, and the network team
+  agrees - they say the switch is clean and there are no errors on the port.
+
+  I tried the same thing with the operator terminal's own name and with the
+  historian and I get the same kind of nothing. One of them I am fairly sure
+  came back straight away saying it did not know the name, and another one just
+  sat there for a while before it gave up, but I was jumping between two
+  terminals and honestly I could not swear to which one did which.
+
+  I can log into both boxes from my desk with no trouble at all the whole time,
+  which is why I don't think anything is actually down.
+
+  The only thing I know of that changed is that the vendor was on site Tuesday
+  night and patched and rebooted the services box. It seemed fine Wednesday
+  though, so I don't know if that is related."
+
+--------------------------------------------------------------------------------
+SYMPTOMS OBSERVED / TRIAGE ALREADY PERFORMED BY REPORTER
+--------------------------------------------------------------------------------
+  * From Container-B: ping by numeric address 10.40.40.10 -> 0% loss, replies
+    normal. Reporter re-ran this several times and it was consistent.
+  * From Container-B: anything that uses a Building 7 name -> fails.
+  * Reporter's account of the exact error text is INCONSISTENT. He recalls at
+    least one immediate "unknown host" style failure and at least one long
+    hang. Do not rely on his recollection - reproduce it yourself and write
+    down exactly what you see, per name and per tool. The difference between
+    "answered immediately with nothing" and "never answered at all" matters.
+  * Reporter rebooted BOTH containers. No change - the same behaviour came
+    back after the reboot.
+  * Reporter confirmed Container-B still has a plant segment address in the
+    expected range and did not set it by hand.
+  * Reporter power-cycled the plant segment switch. No change.
+  * Network team checked the switch port counters - clean, no errors, no drops.
+  * Vendor patched and rebooted Container-A on Tuesday night. Vendor states the
+    patch was "operating system updates only" and that they changed no
+    configuration. (Treat that claim with the usual amount of trust.)
+  * No change ticket exists for Wednesday or Thursday.
+
+--------------------------------------------------------------------------------
+SCOPE OF WORK
+--------------------------------------------------------------------------------
+  1. Restore name-based access from Container-B for every Building 7 name in
+     the as-built binder, so that looking up a name returns the address the
+     binder says it should return, and so that the ordinary tools an
+     application would use agree with each other.
+  2. Confirm Container-B is still getting its plant segment address
+     automatically from Container-A and has not been quietly hand-configured.
+  3. Verify the fix survives a reboot of BOTH containers. The reporter already
+     rebooted once and it did not help - if your fix does not persist, you will
+     be back here tomorrow.
+  4. Document root cause and the exact commands used, for the change record.
+
+  OUT OF SCOPE / HARD CONSTRAINT: the management interface (192.168.10.206 /
+  192.168.10.207), its address, and the default route must not be modified.
+  Management must also keep working for ordinary things like package updates
+  while you are working - do not trade one outage for another.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+  Assume the problem may be more than one thing, and assume more than one box
+  is involved. The reporter is a controls technician, not a network engineer;
+  his description reflects what he could see from the surface, and "it works
+  with numbers but not with names" is the single most useful sentence in this
+  ticket.
+
+  Work the layers in order. Verify each layer before you move up one. Re-test
+  after every single change, and re-test from the machine that is actually
+  complaining, not only from the box you are logged into.
+
+  When two tools disagree about the same question, that disagreement IS the
+  evidence. Do not average it out.
+
+================================================================================
+                        END OF TICKET  -  NSL-51907
+================================================================================

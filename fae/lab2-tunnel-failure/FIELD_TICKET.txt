@@ -1,0 +1,105 @@
+================================================================================
+                 NORTHSTAR LOGISTICS - IT SERVICE DESK
+                        FIELD DISPATCH TICKET
+================================================================================
+
+TICKET ID      : NSL-49037
+OPENED         : 06:52 local
+PRIORITY       : P2 - HIGH (inter-site transfers failing, no data loss reported)
+STATUS         : DISPATCHED - awaiting Field Application Engineer
+QUEUE          : Network Operations -> Field Services
+REPORTER       : Marcus Feld, Site Operations Lead - Site B (Distribution)
+CONTACT        : ext. 5108 / mfeld@northstar-logistics.example
+ASSIGNED TO    : (you)
+
+--------------------------------------------------------------------------------
+AFFECTED SYSTEMS
+--------------------------------------------------------------------------------
+  Site-A gateway   lab-vpn-a    LAB interface address 10.20.20.10
+  Site-B gateway   lab-vpn-b    LAB interface address 10.20.20.20
+
+  The two gateways carry a site-to-site VPN tunnel between the Site-A and
+  Site-B office networks. Tunnel transport rides the 10.20.20.0/24 carrier
+  segment; the tunnel itself is addressed out of 10.99.99.0/24.
+
+  Site-A is the tunnel server. Site-B is the tunnel client.
+
+--------------------------------------------------------------------------------
+HOW TO CONNECT
+--------------------------------------------------------------------------------
+  Management access is UNAFFECTED and has been confirmed working from the
+  office network the entire time. Connect over the management addresses:
+
+      ssh fae@192.168.10.203        (Site-A gateway, lab-vpn-a)
+      ssh fae@192.168.10.204        (Site-B gateway, lab-vpn-b)
+
+  Fallback console password is on file with the desk if key auth is not set up
+  for your workstation. Do NOT reconfigure the management interface, its
+  address, or the default route for any reason - it is the only remote path to
+  these boxes and there is nobody on site to recover them from console.
+
+--------------------------------------------------------------------------------
+USER COMPLAINT (verbatim from reporter)
+--------------------------------------------------------------------------------
+  "The VPN says it is connected but nobody at Site B can actually get to
+  anything at Site A.
+
+  Here is what is strange. If I ping a machine on the other side, sometimes it
+  answers just fine. Small stuff seems OK. But the second anyone tries to
+  actually USE it, it dies. Pulling up the shared drive listing works, opening
+  a file off it hangs forever. Copying a file over is the worst - it starts,
+  it looks like it is going, and then it just stops dead and eventually times
+  out. Same thing when the warehouse app tries to sync its nightly batch, it
+  hangs partway and never finishes.
+
+  It is not a total outage, which is what is driving everybody crazy. If it
+  were just down I would understand it. It looks up. It says it is up. It is
+  not up in any way that helps anyone do their job.
+
+  I have had four people ask me this morning if the VPN is down. I do not have
+  a good answer for them."
+
+--------------------------------------------------------------------------------
+SYMPTOMS OBSERVED / TRIAGE ALREADY PERFORMED BY REPORTER
+--------------------------------------------------------------------------------
+  * Reporter restarted the VPN service on BOTH gateways. It comes back and
+    reports active (running) on both. No change to the symptoms.
+  * Reporter rebooted the Site-B gateway. VPN came back up on its own and
+    still reports active (running). No change to the symptoms.
+  * Small test traffic between the sites sometimes succeeds. Large transfers
+    consistently stall partway and then time out.
+  * No error is ever shown to the user - transfers hang rather than fail fast.
+  * Both gateways remain fully reachable over management the entire time.
+  * Reporter states nothing was changed. There was, however, an unscheduled
+    carrier maintenance window on the inter-site link two nights ago.
+    (Treat that timing as a lead, not as a conclusion.)
+
+--------------------------------------------------------------------------------
+SCOPE OF WORK
+--------------------------------------------------------------------------------
+  1. Restore full end-to-end usability between the Site-A and Site-B office
+     networks across the tunnel - not just reachability, but sustained
+     transfer of real payloads.
+  2. Verify the fix survives a reboot of both gateways.
+  3. Document root cause and the exact commands used, for the change record.
+
+  OUT OF SCOPE / HARD CONSTRAINT: the management interface, its address, and
+  the default route must not be modified on either gateway. If you lose
+  management connectivity this ticket becomes a truck roll and both sites stay
+  degraded until tomorrow.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+  "The service is running" is a statement about the service, not about the
+  path. Confirm the data plane independently of the control plane.
+
+  Assume the problem may be more than one thing, and that the pieces may be
+  split across the two gateways. The reporter is not a network person and
+  their description reflects what they could see from the surface. Work the
+  layers in order, re-test after every single change, and do not assume the
+  first thing you find is the only thing you will find.
+
+================================================================================
+                        END OF TICKET  -  NSL-49037
+================================================================================

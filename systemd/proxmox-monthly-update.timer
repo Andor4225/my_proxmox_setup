@@ -1,0 +1,29 @@
+[Unit]
+Description=Semi-monthly Proxmox VE auto-update timer
+Documentation=file:///usr/local/sbin/proxmox-monthly-update.sh
+
+[Timer]
+# Fire on the 6th and 20th of EVERY month at 02:30 local time — a twice-monthly
+# cadence (24 runs/year). systemd evaluates `*-*-06,20 02:30:00` as: any year,
+# any month, on day-of-month 6 or 20, at 02:30. The weekday floats (date-based).
+# Changed 2026-07-04 from the previous bi-monthly (every-2-months, first-Thursday)
+# cadence to cut patch latency after a pentest surfaced pending -security updates
+# (OpenSSL, QEMU) sitting unapplied between the old sparse runs.
+# Next firings after deployment: 2026-07-06, 2026-07-20, 2026-08-06, 2026-08-20 ...
+#
+# Why 02:30 and not 02:00: hourly restic snapshots fire at top-of-hour from
+# the Windows machine. The pre-flight smbstatus gate trips on any active SMB
+# session and refuses to upgrade — verified in live-test 2026-05-23 11:12 CDT.
+# 02:30 gives restic the full 02:00-02:05 window to complete before we run.
+OnCalendar=*-*-06,20 02:30:00
+# Randomize within 10 minutes — keeps every Proxmox lab on Earth from firing
+# at the exact same instant, smooths apt-mirror load. Effective window: 02:30-02:40.
+RandomizedDelaySec=600
+# If a scheduled firing was missed (host was off), fire on next boot rather
+# than waiting two more months.
+Persistent=true
+# Bind the timer to the service unit by name so the matching service runs.
+Unit=proxmox-monthly-update.service
+
+[Install]
+WantedBy=timers.target
