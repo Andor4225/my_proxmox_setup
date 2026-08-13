@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+# Pre-commit secret gate: blocks a commit that would introduce a secret.
+#
+# Scans ONLY the staged changes (fast) with gitleaks, honoring the repo's
+# .gitleaks.toml (which allowlists the intentional CTF/FAE lab decoys). This
+# hook is version-controlled under hooks/ so it survives clones.
+#
+# Enable in a fresh clone (one time):   git config core.hooksPath hooks
+# Bypass for a single commit (rarely):  git commit --no-verify
+#
+set -uo pipefail
+
+# Fail OPEN but LOUD if gitleaks is missing: a machine without the tool should
+# still be able to commit, but must be told the scan did not run.
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "[pre-commit] WARNING: gitleaks not found on PATH -- secret scan SKIPPED." >&2
+    echo "[pre-commit]   Install gitleaks so your commits are scanned:" >&2
+    echo "[pre-commit]   https://github.com/gitleaks/gitleaks" >&2
+    exit 0
+fi
+
+# Use the repo config if present (allowlists the lab decoys). The
+# "${config_args[@]+...}" form keeps an empty array safe under `set -u` even on
+# bash < 4.4 (e.g. macOS system bash).
+config_args=()
+[ -f .gitleaks.toml ] && config_args=(-c .gitleaks.toml)
+
+# --staged scans only what is about to be committed. --redact keeps any matched
+# secret value out of the terminal / logs.
+gitleaks git --staged --redact "${config_args[@]+"${config_args[@]}"}" .
+rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    exit 0
+elif [ "$rc" -eq 1 ]; then
+    # Exit 1 = gitleaks ran and found something.
+    echo >&2
+    echo "[pre-commit] BLOCKED: gitleaks flagged a potential secret in your staged changes (above)." >&2
+    echo "[pre-commit]   Nothing was committed." >&2
+    echo "[pre-commit]   - If it is a real secret: remove it (use .env, which is gitignored)." >&2
+    echo "[pre-commit]   - If it is a verified false positive or an intentional lab decoy:" >&2
+    echo "[pre-commit]     add its exact value to the allowlist in .gitleaks.toml." >&2
+    echo "[pre-commit]   - To bypass this check for one commit (use with care): git commit --no-verify" >&2
+    exit 1
+else
+    # Any other exit code = gitleaks itself failed (bad config, unknown flag,
+    # internal error) rather than finding a secret. Block anyway (fail closed),
+    # but say what actually happened so the operator fixes the right thing.
+    echo >&2
+    echo "[pre-commit] gitleaks exited $rc (scan error, not a secret finding) -- commit blocked." >&2
+    echo "[pre-commit]   Check the scanner/config (e.g. a malformed .gitleaks.toml), then retry." >&2
+    echo "[pre-commit]   To bypass for one commit (use with care): git commit --no-verify" >&2
+    exit 1
+fi

@@ -49,6 +49,23 @@ This repo is private, but is maintained as though it could become public at any 
 - **Lab credentials in `ctf/` are intentionally weak** and are part of the challenges. The containers are unprivileged and reachable only on the internal lab network / tailnet — those passwords are not real secrets.
 - Internal IPs and Tailscale addresses are non-routable (RFC1918 + CGNAT) and are kept so the lab can be rebuilt from this repo.
 
+### Secret-scanning pre-commit hook
+
+A tracked pre-commit hook (`hooks/pre-commit`) runs [gitleaks](https://github.com/gitleaks/gitleaks) against staged changes and **blocks any commit that would introduce a secret**, honoring the allowlist in `.gitleaks.toml` (which permits only the intentional lab decoys).
+
+Because git hooks live outside the working tree by default, this repo ships the hook under `hooks/` and points git at it. **Enable it once per clone:**
+
+```bash
+git config core.hooksPath hooks
+```
+
+If gitleaks isn't installed, the hook warns loudly and lets the commit through (fail-open). Install gitleaks to get protection. To scan on demand:
+
+```bash
+gitleaks git --redact -v .     # scan full history
+gitleaks git --staged --redact # scan only what's staged
+```
+
 ## What is intentionally not here
 
 Some documentation lives in sibling projects and is intentionally excluded from this repo (business/brand material and anything not part of the lab itself). Where a lab doc references such a file, it says so inline.
