@@ -1,0 +1,26 @@
+# gitleaks config for the proxmox lab repo.
+#
+# Extends the full default ruleset (so real secrets are still caught) and adds a
+# narrow allowlist for the DELIBERATE decoy credentials planted in the CTF/FAE
+# challenges. The allowlist matches the specific fake values by regex, NOT whole
+# directories — so a real secret accidentally added under ctf/ or fae/ would
+# still be flagged.
+#
+# Run:  gitleaks git --redact -v .      (scan committed history)
+#       gitleaks dir --redact -v .      (scan working tree)
+
+title = "proxmox-lab"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Intentional pentest-lab decoy credentials (fake CTF/FAE challenge content, not real secrets)"
+# any regex match => allowlisted
+regexes = [
+  # Fake auth token the network-recon challenge hands the player to reach a flag
+  '''MEGACORP-2024''',
+  # The canonical public jwt.io HS256 demo token, used as a decoy in linux-privesc.
+  # Matched on its fixed demo signature so this can't allowlist an arbitrary JWT.
+  '''SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c''',
+]
