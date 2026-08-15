@@ -4,6 +4,17 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-08-14
+
+**Diagnosed the nightly ~8pm "CPU 88–90°C" OpenClaw alert as the Windows restic backup, and capped its upload rate to flatten the spike. Not a fault — benign transient.**
+
+- **Root cause:** the 8pm alert is OpenClaw's health poll landing during the nightly **Windows restic backup**, which pushes over SMB-over-Tailscale to the OWC enclosure (`/mnt/backup-files/restic`). Confirmed live: restic's own files (`restic/keys|locks|snapshots|index`) were open on the share at 20:03, sourced from the Windows box `100.101.161.87`. On the 2-core i3-1115G4, the upload phase runs Tailscale AES + smbd + USB I/O on both cores → ~88–90°C.
+- **Benign:** throttle/crit is 100°C; **zero thermal-throttle events ever logged**; idle the rest of the day at ~44°C; NVMe 39–50°C (crit 79.8°C). The monitor correctly reported a real-but-harmless burst that crosses its 85°C threshold.
+- **Fix (option 1 of 2):** capped restic's upload to **20 MiB/s** via a new `[int]$UploadLimitKiBps = 20480` in the Windows `utilities/restic/restic-backup.ps1`, applied to both `backup` and `forget --prune` (prune repacks/uploads too). Slower backups (accepted); incrementals are small so most nights are unaffected. PowerShell-parsed, restic-flag-verified (0.19.1), and reviewed (APPROVE, 0 defects). The alternative (raising the OpenClaw threshold to ~92°C) was **not** done — left as a future option.
+- **Storage at diagnosis time:** VM/CT pools nearly empty (`local-lvm` 8%, `sata-vmstorage` <1%, `pve-root` 18%). Only the OWC backup targets carry real usage — **restic `backup-files` 73% (120 GB free)** is the one to watch; Veeam `backup-images` 55% (202 GB free).
+
+---
+
 ## 2026-08-13
 
 **Repo put under version control and pushed to a private GitHub backup — `github.com/Andor4225/my_proxmox_setup` — after a two-pass secret/PII audit. First commit `3278756`, 47 files.**
