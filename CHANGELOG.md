@@ -13,6 +13,22 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 - **Fix (option 1 of 2):** capped restic's upload to **20 MiB/s** via a new `[int]$UploadLimitKiBps = 20480` in the Windows `utilities/restic/restic-backup.ps1`, applied to both `backup` and `forget --prune` (prune repacks/uploads too). Slower backups (accepted); incrementals are small so most nights are unaffected. PowerShell-parsed, restic-flag-verified (0.19.1), and reviewed (APPROVE, 0 defects). The alternative (raising the OpenClaw threshold to ~92°C) was **not** done — left as a future option.
 - **Storage at diagnosis time:** VM/CT pools nearly empty (`local-lvm` 8%, `sata-vmstorage` <1%, `pve-root` 18%). Only the OWC backup targets carry real usage — **restic `backup-files` 73% (120 GB free)** is the one to watch; Veeam `backup-images` 55% (202 GB free).
 
+### Used the free space to close a real backup gap + widen coverage
+
+Discussion of what to do with the free storage led to two additions (and a deliberate non-change):
+
+- **NEW: weekly Proxmox guest backups (`vzdump`).** The VMs/CTs had **no actual backup** — only same-disk snapshots, which don't survive a disk/pool loss. Created a backup job (id `6253684c…`): guests **100, 300, 900, 901** → `sata-backups`, `mode=snapshot` (no downtime), `compress=zstd`, `schedule=sun 05:30`, `prune-backups=keep-last=4`. Tuned `/etc/vzdump.conf` gentle for the 2-core CPU (`zstd: 1`, `bwlimit: 80000`). First run executed and **verified**: 4/4 archives (ubuntu-target 5.6 G, web-server 251 M, staging-tmpl 1007 M, managed-tmpl 1.1 G ≈ 8 G total), zstd-integrity-checked, PVE lists all four as restorable. The reproducible CTF/FAE labs were **excluded** (they rebuild from the GitHub deploy scripts).
+- **NEW: D: drive coverage in restic.** Added six important, non-reproducible D: folders (`AI_Brain_Archive`, `OpenClaw_Backup`, `.claude`, `.gemini`, `Word Documents`, `CurvesOrNot_Project`; ≈ 6 GB) to the Windows `restic-backup.ps1`, via a runtime `Test-Path` filter so a renamed folder logs a WARN instead of failing the whole backup. Bulky/reproducible D: content (34 GB DeAuthorization Logs, iTunes, .exe installers) deliberately left out — flagged to the operator as an add-if-wanted decision. Takes effect on the next nightly restic run.
+- **NOT done (deliberate):** did **not** move the restic/Veeam repos onto the internal free space — the OWC enclosure being a *separate device* from both the Windows box and the Proxmox internal disks is what makes those backups sound; keeping them isolated. Remaining free space left as headroom for planned lab VMs.
+
+### Reviews + a caught CRITICAL (restic D: change)
+
+The restic script change was dual-reviewed. Codebase reviewer caught a **CRITICAL**: `Start-Process -ArgumentList` space-joins array elements without quoting, so `D:\Word Documents` (the first space-containing path ever added) would split into two args and fail every run. Fixed by quoting whitespace-containing elements inside `Invoke-Restic` (fixes it for all callers). **Verified with real restic against a throwaway repo:** unquoted → exit 1 "`D:\Word does not exist, skipping`"; quoted → exit 0, path accepted. Also folded in the DEFENSIVE finding: restic **exit 3** (some files unreadable/locked) is now treated as success-with-warning so it doesn't abort and skip `forget/prune`. (Codex still unavailable — Windows sandbox broken — so a reviewer subagent was the second opinion.)
+
+### Thermal note (reinforced)
+
+The first `vzdump` run peaked at **91°C** even with `zstd:1` + bwlimit — confirming the box is fundamentally cooling-limited: *any* sustained backup (restic or vzdump) spikes it to ~90°C, and none throttle. So the weekly Sunday-05:30 vzdump **will** trip the 85°C OpenClaw alert too. Standing recommendation (not yet actioned): **raise the OpenClaw CPU-temp threshold from 85°C to ~93°C** so normal backups stop paging while genuinely dangerous temps still do. (Pi/OpenClaw side.)
+
 ---
 
 ## 2026-08-13
