@@ -4,6 +4,23 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-08-22
+
+**Fixed the "backup health CHECK BROKEN" alert (monitor lost its exec bit — backups were fine), and created VM 110 for an Omarchy Linux try-out.**
+
+### backup-health-check.service failing 203/EXEC — monitor broken, backups healthy
+OpenClaw reported the health check as broken (`ExecMainStatus=203`). Two things were conflated in the alert:
+- **Stale (resolved):** the 2026-08-11 "Veeam migration in progress / no restore points in `/mnt/backup-images`" WARN lines. The migration has since **completed** — `backup-images` (sdd, canonical target) now holds a full `.vbk` (Aug 15) plus daily `.vib` incrementals through today (Aug 22 04:30). Veeam is healthy and current.
+- **The real live failure:** `/usr/local/sbin/backup-health-check.sh` was `-rw-r--r--` — **the executable bit was lost when the script was rewritten on Aug 17**, so systemd couldn't exec it (`203/EXEC`, "Permission denied") every 30 min. Fix: `chmod +x`; verified it now runs clean (**exit 0, "0 failures, 0 warnings"** — both mounts OK, restic 0h fresh, Veeam 5h old, no USB errors), then `reset-failed`. Service now `ExecMainStatus=0`, timer enabled (next Sun 09:01). The deployed script's SHA **matches the repo copy** (`scripts/backup-health-check.sh`, which is `+x`), so only the deploy dropped the bit — a redeploy of this file must re-apply `chmod +x` (scp/write default to 644). Textbook [[feedback_backup_monitor_path_drift]]: the monitor's own failure looked like a backup failure.
+
+### VM 110 — omarchy (Arch/Hyprland desktop try-out)
+Uploaded `omarchy-4.0.0.iso` (5.84 GB, byte-verified) to `local` ISO storage and created **VM 110** on sata-vmstorage: UEFI/OVMF, q35, `cpu host`, 2c/8 GB/64 GB, virtio-gpu, virtio net. Running and booting the installer (a boot spike briefly hit 94°C, settled to ~47°C idle — under the 100°C crit). Caveat: no GPU passthrough, so Hyprland uses software rendering and may be sluggish. Excluded from the weekly vzdump job (disposable). See CLAUDE.md.
+
+### Docs
+Wrote `ctf-lab-post-brief.md` (a LinkedIn-post source brief for the CTF lab, mirroring `linkedin-post-brief.md`); both are gitignored as career/branding docs.
+
+---
+
 ## 2026-08-14
 
 **Diagnosed the nightly ~8pm "CPU 88–90°C" OpenClaw alert as the Windows restic backup, and capped its upload rate to flatten the spike. Not a fault — benign transient.**

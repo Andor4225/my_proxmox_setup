@@ -66,6 +66,9 @@ Deep architecture/operational detail lives in topic-specific files. **Read the r
 ### VM 100 — ubuntu-target (QEMU)
 Pre-existing Ubuntu VM with OWASP Juice Shop in Docker. 2 vCPUs, 4GB RAM, 32GB disk. User's original pentest target.
 
+### VM 110 — omarchy (QEMU)
+Omarchy 4.0.0 (Arch/Hyprland desktop) try-out VM, created 2026-08-22. UEFI (OVMF, no pre-enrolled SB keys), q35, `cpu host`, 2 cores, 8GB RAM, 64GB disk + 4M EFI on **sata-vmstorage**, virtio-gpu, virtio net on vmbr0. ISO `local:iso/omarchy-4.0.0.iso`. Access the installer via the Proxmox web console (noVNC). ⚠️ No GPU passthrough (host has only Intel iGPU), so Hyprland runs on virtio-gpu software rendering (llvmpipe) and may be sluggish. Excluded from the vzdump backup job (disposable). Boot order `scsi0;ide2` auto-boots the disk once installed.
+
 ### FAE Practice Labs (CTIDs 201–205)
 3 troubleshooting labs for hands-on Linux/networking practice: **lab1** broken router (CT 201/202), **lab2** OpenVPN tunnel failure (CT 203/204), **lab3** raw log playground (CT 205). Each container is **dual-homed**: `eth0` mgmt on `vmbr0` (`192.168.10.201-205`, Tailscale-reachable, never touched by faults) + `eth1` on an **isolated** bridge (`vmbr1`/`vmbr2`, no uplink) where all breakage lives. Deliberately broken; re-arm via snapshot rollback. See `fae/README.md`.
 
