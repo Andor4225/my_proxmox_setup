@@ -87,6 +87,8 @@ Rebuilt on **211–215** rather than its original 201–205, which the FAE labs 
 ### Windows Backups
 SMB-over-Tailscale shares from `\\100.81.116.89\` (`backup-files` = restic, `backup-images` = Veeam) to `gavin:gavin`-owned dirs on the OWC Express 4M2 enclosure. nftables locks ports 139/445 to `lo` + `tailscale0` only. See `windows-backup.md` for architecture and `plans/windows-backup-runbook.md` for operations.
 
+**Veeam capacity reset (2026-09-02):** `backup-images` had filled to 94% — a forever-forward image of the whole 321 GB C: volume doesn't fit a 469 GB disk. Fixed by trimming Windows C: ~60 GB (moved Ollama/PlatformIO/Arduino data to D: via env vars, cleared caches, Steam → D:), reconfiguring Veeam to **volume-level C:-only** with **3-day retention**, and deleting the bloated old chain so a fresh lean full (~190 GB) could be taken. Ongoing rule: keep Veeam lean (it's the bare-metal image; restic is the primary *data* backup) — reproducible bulk stays off C:, and D: is excluded from the Veeam image. See CHANGELOG 2026-09-02.
+
 ## Automated Maintenance
 
 Two systemd timers run unattended maintenance on the host. Both write to plain log files AND systemd journal so OpenClaw and humans can both consume them.

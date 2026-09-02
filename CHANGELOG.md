@@ -4,6 +4,35 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-09-02
+
+**Veeam target disk (backup-images, sdd) filled to 94%; root-caused as a capacity mismatch, not a fault. Trimmed the Windows C: drive by ~60 GB, reset the Veeam config (3-day retention, volume-level C:-only), and deleted the bloated old chain so a fresh lean full can be taken.**
+
+### The two alerts
+- Veeam nightly session finished with a **level-3 Warning** (low target space) at 04:41.
+- `backup-health-check` fired `[WARN] /mnt/backup-images is 92→94% full`.
+Both were the **same root cause**: the Veeam target was nearly full. Backups themselves were valid and current (latest restore point 2 h old, health check otherwise green).
+
+### Diagnosis
+`backup-images` (sdd, 469 GB) held **418 GB**: one 238 GB full (`.vbk`, 08-26) + 10 incrementals, several huge (**89 GB on 09-01**, 22 GB on 09-02, 20-25 GB on others). Windows-side investigation (via the Windows Machine Steward agent) found the driver: **Veeam images the entire 321 GB C: volume**, and C: is mostly reproducible/cloud data churning daily. This is a *structural* mismatch — a 469 GB disk can't hold a forever-forward image of a 321 GB volume with this change rate (the `.vbk` only grows, since forever-forward merges incrementals into it). See AI_Brain `reference_proxmox_backup_layout`.
+
+### C: cleanup (~60 GB reclaimed, 321 → 261 GB used)
+The Windows Machine Steward agent verified each move is safe/non-destructive first (D: is a fixed internal Samsung 850 EVO SSD, separate disk from C:; nothing irreplaceable loses coverage since it's cloud/reproducible and restic covers the real data). Executed:
+- **Cleared caches** via each tool's own cleaner: `npm cache clean --force`, `pip cache purge`, `uv cache clean` (~10 GB).
+- **Moved to D: (env-var relocation, verified):** `.ollama\models` → `D:\ollama\models` (set `OLLAMA_MODELS`; `ollama list` functionally confirmed; keypair left in place); `.platformio` → `D:\platformio` (set `PLATFORMIO_CORE_DIR`; PIO rebuilds its penv on next launch); `AppData\Local\Arduino15` → `D:\Arduino15` (rewrote `data:` + `builtin.libraries:` in `.arduinoIDE\arduino-cli.yaml`, backup kept).
+- **User moved via app:** Steam library (15 GB → `D:\SteamLibrary`).
+- **Dropbox: deliberately NOT moved** — it shows 80 GB total but only **~10 GB on disk** (the rest are Cloud-Filter online-only placeholders that take ~0 disk and ~0 image space). Not worth moving.
+
+### Veeam reconfig (user, in the Agent UI)
+- Retention **7 → 3 days** ("Keep backups for").
+- Backup mode **Entire computer → Volume-level, C: only** (D: is now excluded from the image — restic already covers the important D: folders). This is what makes the C:→D: moves actually shrink the image.
+- Confirmed: no periodic active fulls; Defragment-and-Compact still OFF (turn ON once there's headroom).
+
+### Old chain deleted (to allow a lean fresh full)
+The cleanup shrinks *future* backups, not the existing one — the bloated 418 GB chain still occupied the disk. Veeam Agent (free edition) has no "delete from disk" UI, so with the user's explicit go-ahead and restic verified current as the data safety net, the chain files (`*.vbk *.vib *.vbm` in `/mnt/backup-images/Window-Backup/`) were deleted directly on the host. **sdd 94% → 1% used (445 GB free)**; restic on sdc untouched; folder ownership (`gavin:gavin`) preserved for Veeam. User to run **Back Up Now** → fresh ~190 GB full (from trimmed C:), which now fits with huge headroom. Expect a ~90 °C thermal spike + OpenClaw temp alert during the one-time full (benign; more evidence for raising the OpenClaw threshold 85 → ~93 °C).
+
+---
+
 ## 2026-08-22
 
 **Fixed the "backup health CHECK BROKEN" alert (monitor lost its exec bit — backups were fine), and created VM 110 for an Omarchy Linux try-out.**
