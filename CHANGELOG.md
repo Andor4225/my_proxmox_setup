@@ -4,6 +4,47 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-11-01
+
+**Second Veeam capacity crunch. The Windows "Backup Heartbeat" posted a Veeam Warning every ~6h from 10/31. The cause was Veeam's "Defragment and compact full backup file" step, which cannot fit on the 469 GB target. Fixes: compaction turned off, C: trimmed by 85 GiB, chain reset, and the heartbeat monitor rewritten.**
+
+### Diagnosis
+- **The backups themselves were fine.** A restore point landed every night. The Warning came from the post-backup **compact** step (`[FullStorageCompact] Copying 1 Oibs into <new> storage`), which copies the whole full into a new file. It failed with `0x70 ERROR_DISK_FULL` at about 90-100 GB written. Compaction needs roughly the full's size free, about 272 GB; only 70-90 GB was free after each nightly increment.
+- **Compaction was found TICKED** in the job's Maintenance tab, despite the 09-02 note "Defragment-and-Compact still OFF". Nothing records when it was re-enabled. Its default schedule (last Saturday of the month) fired on 10/31, and it retried nightly.
+- **Why the full grew from ~190 GB to 272.6 GB:** C: grew from ~261 GB used (09-02) to 385 GiB. The biggest single item was **80 GB in `C:\Users\Gavin\Dropbox\.dropbox.cache\old_files`**: leftovers from the Dropbox client, which is no longer installed (Proton Drive migration started 10/16). Veeam's free-space log shows a ~91 GB drop on 10/24, matching new data landing on C:. All 09-02 relocations (Ollama, PlatformIO, Arduino, Steam) still hold.
+- The **heartbeat was right** to alert, but its message named the wrong share (`backup-files\veeam`), dropped the cause, never filtered by job, skipped staleness after a Warning, and muted new failing sessions for 6h.
+
+### Fixes
+- **Veeam (Gavin, in the Agent UI):** unticked "Defragment and compact full backup file". On this target it can never succeed. Veeam reuses blocks freed by the nightly merges, so the full grows only slowly without it.
+- **C: trim (85 GiB, 385 → 300 GiB used):** deleted the Dropbox `old_files` cache (Gavin confirmed the data is in Proton Drive) and a stray 5 GB Claude task-output file in `%TEMP%`.
+- **Chain reset (09-02 procedure):** confirmed restic current and no SMB locks, then deleted the 5 chain files in `/mnt/backup-images/Window-Backup_1/` (sdd 82% → 1%). Gavin started Back Up Now at 09:43, and Veeam created a **new folder `Window-Backup_2`**, as it created `_1` on 09-02. **The fresh full finished at 10:35 with Success: 155.2 GB (was 272.6 GB). sdd is at 35% used, 290 GB free**, written at ~3.7 GB/min; PVE CPU peaked around 73 °C. The empty `Window-Backup` and `Window-Backup_1` folders are harmless leftovers. `backup-health-check.sh` scans `/mnt/backup-images` recursively, so folder renames don't affect it.
+- **Heartbeat rewrite** (`utilities\restic\backup-heartbeat.ps1`; backup at `.bak-20261101`; new Pester suite `backup-heartbeat.Tests.ps1`, 104 tests, mutation-checked):
+  - filters event-190 sessions by job `Window-Backup`;
+  - Warning reads as "restore point created but a post-backup step failed: <cause>", Error as "backup FAILED";
+  - always reports hours since the newest session and since the last success;
+  - rejects future-dated records;
+  - per-condition alert signatures: a new failing session alerts immediately, the same one reminds after 24h (Veeam) or 6h (restic, service); recovery keeps the signature (anti-flap);
+  - the cause sanitizer is **fail-closed** (any credential/auth keyword withholds the cause), and every exception message is sanitized before Discord or the log;
+  - `allowed_mentions` is off;
+  - the correct share (`backup-images`) is named.
+
+  Deployed 10:20, and the first run sent one new-format alert. Known limitations: a future-dated record is trusted once the clock reaches it; a state-save failure re-alerts every run; the PS 5.1 `-AsHashtable` issue is pre-existing (the task runs pwsh).
+- **Review:** Codex (via the runner) reviewed 3 rounds, and every finding was checked against the code; some were rejected with reasons. **agy was replaced by the Claude Code Reviewer agent** for the heartbeat change because of the incident below.
+
+### Security incident: Discord webhooks exposed to agy
+During the pre-change review, the agy leg opened `openclaw\discord-bot\webhook-map.json` (line 35 of the heartbeat names it). That sent live Discord webhook URLs to agy's model. Six agy brain transcripts (10/18 to 11/01) held webhook URLs; their `logs` folders were deleted, and a re-scan of `~\.gemini` finds none. **Rotate the webhooks in `webhook-map.json`.** **Dual-review runner hardened and deployed shortly after 11:00 (Gavin approved).** The 11:00 heartbeat run then posted "✅ Veeam backups recovered" for the 10:35 Back Up Now success. Changes to `~\.claude\skills\dual-review\` (backup in `backup-20261101\`):
+- both the agy and Codex prompts limit reads to REVIEW_TASK.md and inputs\;
+- a pre-launch guard scans inputs, file names, source paths, the Brief and the diff for secret-store references and skips agy when one matches (it fails over to the Claude Code Reviewer). The audited `-AllowAgySecretRefs` override is for Gavin's per-run approval only;
+- post-run detectors record possible reads outside the inputs (`outOfScopeReads.{agy,codex}`) and flag secret-shaped strings in reviewer output;
+- new `tests\test_agy_scope.ps1` (154 checks, PATH-trapped so tests can never launch real agy).
+
+The guard is documented as a backstop, not a control. It was reviewed over 2 rounds by Codex and the Claude Code Reviewer. The `claude_mods\staging` copy of the runner (the Omarchy port) is separate and still needs this port. Lesson: AI_Brain `feedback_agy_review_reads_secret_files_outside_inputs`.
+
+### Side finding: Tailscale blip took this Windows PC off the LAN
+At ~08:57 the Proxmox and Pi Tailscale nodes lost the coordination server for a few minutes. Windows has `RouteAll: true` (accept-routes), so the `192.168.10.0/24` subnet route via `proxmox-pve` overrode the directly connected LAN, and every LAN host (even the `.1` gateway) went unreachable. Workaround: `ssh -b 192.168.10.97 …` forces the Ethernet source. **Fixed at 10:25 with Gavin's approval:** ran `tailscale set --accept-routes=false` on the Windows PC. LAN traffic now goes out `Ethernet 3`. The tailnet SMB path to `100.81.116.89:445` (restic and Veeam) was verified still reachable, and the in-flight Veeam full kept writing.
+
+---
+
 ## 2026-09-02
 
 **Veeam target disk (backup-images, sdd) filled to 94%; root-caused as a capacity mismatch, not a fault. Trimmed the Windows C: drive by ~60 GB, reset the Veeam config (3-day retention, volume-level C:-only), and deleted the bloated old chain so a fresh lean full can be taken.**

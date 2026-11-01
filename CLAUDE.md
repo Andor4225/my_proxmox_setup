@@ -89,6 +89,8 @@ SMB-over-Tailscale shares from `\\100.81.116.89\` (`backup-files` = restic, `bac
 
 **Veeam capacity reset (2026-09-02):** `backup-images` had filled to 94% — a forever-forward image of the whole 321 GB C: volume doesn't fit a 469 GB disk. Fixed by trimming Windows C: ~60 GB (moved Ollama/PlatformIO/Arduino data to D: via env vars, cleared caches, Steam → D:), reconfiguring Veeam to **volume-level C:-only** with **3-day retention**, and deleting the bloated old chain so a fresh lean full (~190 GB) could be taken. Ongoing rule: keep Veeam lean (it's the bare-metal image; restic is the primary *data* backup) — reproducible bulk stays off C:, and D: is excluded from the Veeam image. See CHANGELOG 2026-09-02.
 
+**Second crunch (2026-11-01):** "Defragment and compact full backup file" had been re-enabled. It needs about one full's size free (~272 GB), so on this 469 GB target it can never succeed, and it caused nightly Warnings. It is now **OFF and must stay off**. C: was trimmed 385 → 300 GiB (an 80 GB Dropbox cache), the chain was reset again, and the new chain lives in `Window-Backup_2`. The Windows heartbeat (`utilities\restic\backup-heartbeat.ps1`) was rewritten: job filter, cause in alerts, signature-based re-alerting, fail-closed sanitizer. See CHANGELOG 2026-11-01.
+
 ## Automated Maintenance
 
 Two systemd timers run unattended maintenance on the host. Both write to plain log files AND systemd journal so OpenClaw and humans can both consume them.
@@ -179,7 +181,7 @@ proxmox/                          # This repo (on Windows dev machine)
 - **Tailnet**: All machines on the same Tailscale account
 - **Proxmox**: `proxmox-pve` / `100.81.116.89` — subnet router for `192.168.10.0/24`
 - **Pi**: `gsraspberrypi` / `100.108.179.114`
-- **Windows**: `andor4225` / `100.101.161.87`
+- **Windows**: `andor4225` / `100.101.161.87`. `accept-routes` has been **off** since 2026-11-01, so LAN traffic goes out Ethernet and not through pve's subnet route. When it was on, pve dropping off Tailscale black-holed the whole LAN from Windows. Keep it off on home-LAN machines (CHANGELOG 2026-11-01).
 - **Ubuntu travel**: `ubuntu-g7` / `100.87.250.125`
 - **Kali VM**: Not yet on Tailscale — works if VM uses NAT networking through Ubuntu host, otherwise needs its own Tailscale install
 - **Remote CTF access**: From any Tailscale device, CTF containers are reachable at their LAN IPs (`192.168.10.201-205`) via the subnet route

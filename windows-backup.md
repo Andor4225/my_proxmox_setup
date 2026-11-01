@@ -18,7 +18,13 @@ Backs up the Windows machine to the OWC Express 4M2 NVMe enclosure on Proxmox vi
 
 Both owned by `gavin:gavin`, mode `0750`. Auth: SMB user `gavin` (Linux user, no shell, Samba password set via `smbpasswd -a gavin`).
 
-**Capacity**: the OWC drives (~466GB / ~445GB usable) comfortably hold a full Veeam chain plus retention — no longer capacity-constrained as the 200GB internal partition was. Restic deduplication keeps file-level backups small.
+**Capacity**: each OWC drive has ~445 GB usable.
+- Restic (deduplicated) is small.
+- **The Veeam target IS capacity-constrained.** A forever-forward image of C: (full ~190-270 GB plus ~15-90 GB daily increments, 3-day retention) fills it twice over in months; see CHANGELOG 2026-09-02 and 2026-11-01.
+- **Rules:**
+  - keep reproducible bulk off C:;
+  - keep Veeam's "Defragment and compact full backup file" **OFF**, because it needs a second full's worth of free space;
+  - when the target fills, trim C: and reset the chain (delete the chain files on the host, then Back Up Now).
 
 ## Config files (on Proxmox host)
 | File | Purpose |
