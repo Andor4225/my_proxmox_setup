@@ -1,14 +1,17 @@
 #!/bin/bash
-# proxmox-monthly-update.sh — automated bi-monthly Proxmox VE upgrade.
+# proxmox-monthly-update.sh — automated semi-monthly Proxmox VE upgrade.
 #
-# Runs on the Proxmox host via systemd timer every other month, first Thursday
-# at 02:00 CT. Mirrors the manual upgrade procedure executed 2026-05-23 for
+# Runs on the Proxmox host via systemd timer on the 6th and 20th of each month
+# at 02:30 CT. Mirrors the manual upgrade procedure executed 2026-05-23 for
 # 9.1.1 → 9.2.2:
 #
 #   1. Pre-flight   — free space, no in-flight backup, OWC mounts healthy
 #   2. Snapshot     — running + stopped CTs/VMs (skip templates), /etc backup
 #   3. Upgrade      — apt full-upgrade with force-confold / force-confdef
-#   4. Reboot       — ONLY if /var/run/reboot-required exists
+#   4. Reboot       — ONLY if a newer kernel is installed than the one running
+#                     (PVE has no /var/run/reboot-required; see Phase 4). The running guests
+#                     are recorded first; proxmox-guest-restore.service restarts
+#                     them after boot (fatal, with no reboot, if recording fails)
 #   5. Cleanup      — prune auto_update_* snapshots older than 60 days
 #
 # Verification after a reboot is intentionally not done inside this script:
@@ -47,6 +50,16 @@ MIN_BOOT_MB=500
 MIN_VAR_GB=5
 HEALTH_CHECK=/usr/local/sbin/backup-health-check.sh
 SNAPSHOT_RETENTION_DAYS=60
+# Success marker (epoch) - written ONLY after a completed run; backup-health-check
+# alarms when it is missing or stale, so a silently failing updater gets noticed.
+MARKER_DIR=/var/lib/proxmox-monthly-update
+MARKER="$MARKER_DIR/last-success"
+# Guests running when a reboot is scheduled; proxmox-guest-restore.service starts
+# them again after boot (lab guests are onboot=0 and would otherwise stay down).
+RESTORE_LIST="$MARKER_DIR/restore-guests"
+# Backup-in-flight gate: SMB share roots, and how long they must have been quiet.
+BACKUP_MOUNTS=(/mnt/backup-files /mnt/backup-images)
+BACKUP_QUIET_MIN=15
 # No internal `timeout` wrapper on apt full-upgrade — killing dpkg mid-postinst
 # is worse than running long. The systemd unit owns the overall cap via
 # TimeoutStartSec (see proxmox-monthly-update.service).
@@ -61,7 +74,74 @@ log()   { echo "$(date -Is) $*" | tee -a "$LOG"; }
 ok()    { log "[OK]    $*"; }
 warn()  { log "[WARN]  $*"; }
 bad()   { log "[FAIL]  $*"; }
-fatal() { bad "$*"; exit "${2:-1}"; }
+fatal() { bad "$1"; exit "${2:-1}"; }
+
+# backup_activity <smbstatus-L-json> <quiet-minutes> <mount>...
+# Ground truth for "is a Windows backup writing right now". An idle SMB SESSION is
+# not activity: the PC keeps both shares mapped 24/7, and counting sessions blocked
+# every run from 2026-09-06 to 2026-11-06. Activity = a file open over SMB, or any
+# write under a backup mount within <quiet-minutes> (restic refreshes its repo lock
+# every 5 min, so a running restic backup always shows a fresh write).
+# Prints a reason. rc 0 = activity, 1 = quiet, 2 = could not verify (fail closed).
+backup_activity() {
+  local json="$1" quiet="$2" n d hit rc
+  shift 2
+  n=$(printf '%s' "$json" | jq -r '.open_files | if type == "object" then length else error("open_files missing") end' 2>/dev/null) \
+    || { echo "cannot parse smbstatus JSON"; return 2; }
+  case "$n" in ''|*[!0-9]*) echo "unexpected open_files count '$n'"; return 2 ;; esac
+  if [ "$n" -gt 0 ]; then echo "$n file(s) open over SMB"; return 0; fi
+  [ "$#" -gt 0 ] || { echo "no backup mounts given"; return 2; }
+  for d in "$@"; do
+    [ -d "$d" ] || { echo "$d is not a directory"; return 2; }
+    hit=$(timeout 300 find "$d" -xdev -mmin "-$quiet" -print -quit 2>/dev/null)
+    rc=$?
+    [ "$rc" -eq 0 ] || { echo "scan of $d failed (rc=$rc)"; return 2; }
+    if [ -n "$hit" ]; then echo "$d written within the last ${quiet} min"; return 0; fi
+  done
+  echo "no files open over SMB and no backup writes in the last ${quiet} min"
+  return 1
+}
+
+# Stamp the success marker atomically. A failure to stamp is only a warning here,
+# but it is loud downstream: backup-health-check will report the updater as stale.
+stamp_success() {
+  if mkdir -p "$MARKER_DIR" && date +%s > "$MARKER.tmp" && mv -f "$MARKER.tmp" "$MARKER"; then
+    ok "success marker stamped ($MARKER)"
+  else
+    warn "could not write success marker $MARKER - backup-health-check will report the updater as stale"
+  fi
+}
+
+# record_running_guests <list-file> [boot-id-file]
+# Writes "# boot_id <current boot>" then one "CT <id>" / "VM <id>" line per running
+# guest, atomically (tmp + mv). The restore service uses the boot_id to prove a
+# reboot happened (clocks can be off at boot).
+# If an UNRESOLVED list from an earlier reboot is still there (a restore failed, so
+# backup-health-check is alarming on it), its entries are carried over, so this run
+# cannot silently drop guests that are still down and clear the alarm.
+# Returns non-zero if either listing fails, so a half-known set is never written.
+# pct list columns: VMID Status [Lock] Name (Status is always column 2);
+# qm list columns: VMID NAME STATUS ... (Status is column 3).
+record_running_guests() {
+  local f="$1" bidf="${2:-/proc/sys/kernel/random/boot_id}" cts vms bid
+  cts=$(pct list) || return 1
+  vms=$(qm list) || return 1
+  bid=$(cat "$bidf" 2>/dev/null) || return 1
+  [[ "$bid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  mkdir -p "$(dirname "$f")" || return 1
+  {
+    echo "# boot_id $bid"
+    {
+      awk 'NR > 1 && $2 == "running" { print "CT", $1 }' <<<"$cts"
+      awk 'NR > 1 && $3 == "running" { print "VM", $1 }' <<<"$vms"
+      if [ -e "$f" ]; then
+        grep -v '^# boot_id ' "$f"
+        [ $? -le 1 ]   # 1 = no entries (fine); 2 = read error (fail the record)
+      fi
+    } | sort -u
+  } > "$f.tmp" || return 1
+  mv -f "$f.tmp" "$f"
+}
 
 # --- Lock: prevent concurrent runs. flock releases on FD close at script exit. ---
 exec 200>"$LOCKFILE" || fatal "cannot open lockfile $LOCKFILE"
@@ -95,7 +175,9 @@ ok "/var has ${var_avail_gb}GB free"
 
 # Backup health — refuse to upgrade if the backup system is degraded
 if [ -x "$HEALTH_CHECK" ]; then
-  if ! "$HEALTH_CHECK" >/dev/null 2>&1; then
+  # Skip ITS auto-update check: a failed previous run would otherwise make the
+  # health check fail, which would block this run forever.
+  if ! BHC_SKIP_UPDATER_CHECK=1 "$HEALTH_CHECK" >/dev/null 2>&1; then
     fatal "backup-health-check failed — refusing to upgrade with broken backup state (see /var/log/backup-health-check.log)"
   fi
   ok "backup health check passed"
@@ -113,22 +195,34 @@ if [ -f /var/run/vzdump.lock ] && ! flock -n /var/run/vzdump.lock -c true 2>/dev
 fi
 ok "no vzdump in flight"
 
-# Active SMB clients — restic / Veeam may be streaming to /mnt/backup-*.
-# Capture stdout AND rc separately so a smbstatus failure fails CLOSED (refuse
-# to upgrade because we can't verify the SMB state) rather than fail OPEN
-# (awk prints 0 even when smbstatus crashed, current_clients silently "0").
-# Match on data-row shape (PID + alpha username) instead of a header line count,
-# so the gate keeps working if Samba changes its header format in a future version.
-smb_raw=$(smbstatus --processes 2>/dev/null)
-smb_rc=$?
-if [ "$smb_rc" -ne 0 ]; then
-  fatal "smbstatus failed (rc=$smb_rc) — cannot verify SMB state, refusing to upgrade"
-fi
-smb_clients=$(printf '%s\n' "$smb_raw" | awk '/^[0-9]+[[:space:]]+[a-zA-Z_]/ {c++} END {print c+0}')
-if [ "${smb_clients:-0}" -gt 0 ]; then
-  fatal "${smb_clients} active SMB client(s) — backup may be in flight"
-fi
-ok "no active SMB sessions"
+# Windows backup in flight? (restic / Veeam over SMB to /mnt/backup-*). See
+# backup_activity for why idle sessions don't count. Called twice: here, and again
+# right before apt (a backup could start while the snapshots run). Each mount must
+# be the REAL ext4 disk: an absent OWC drive leaves a bare directory behind, which
+# would otherwise scan as "quiet" (the health check catches that too, but it is
+# skipped with only a warning if missing). smbstatus rc is captured separately so
+# a smbstatus failure fails CLOSED.
+check_backup_quiet() {
+  local d fstype smb_json smb_rc activity activity_rc
+  for d in "${BACKUP_MOUNTS[@]}"; do
+    timeout 60 ls "$d" >/dev/null 2>&1   # trigger x-systemd.automount
+    fstype=$(findmnt -nro FSTYPE -t ext4 --mountpoint "$d" 2>/dev/null | head -1)
+    [ "$fstype" = "ext4" ] || fatal "$d is not a mounted ext4 backup disk — cannot verify backup activity, refusing to upgrade"
+  done
+  smb_json=$(smbstatus -L --json 2>/dev/null)
+  smb_rc=$?
+  if [ "$smb_rc" -ne 0 ]; then
+    fatal "smbstatus failed (rc=$smb_rc) — cannot verify SMB state, refusing to upgrade"
+  fi
+  activity=$(backup_activity "$smb_json" "$BACKUP_QUIET_MIN" "${BACKUP_MOUNTS[@]}")
+  activity_rc=$?
+  case "$activity_rc" in
+    0) fatal "Windows backup in flight ($activity) — deferring" ;;
+    1) ok "$activity" ;;
+    *) fatal "cannot verify backup activity ($activity) — refusing to upgrade" ;;
+  esac
+}
+check_backup_quiet
 
 # Any in-progress Proxmox cluster task (migrate, restore, etc.)?
 # Capture rc — pvesh failure shouldn't pass as "no tasks running".
@@ -219,6 +313,12 @@ ok "all snapshots created"
 # ============================================================================
 log "Phase 3: apt update + full-upgrade"
 
+# Re-check right before the first package change: the snapshots take minutes, and
+# a backup that started meanwhile would be cut off by a samba restart or reboot.
+# A residual window remains (a backup starting DURING apt); Veeam (04:30) and
+# restic (20:00) never start near the 02:30 slot, and both retry the next night.
+check_backup_quiet
+
 apt update 2>&1 | tee -a "$LOG"
 apt_update_rc=${PIPESTATUS[0]}
 if [ "$apt_update_rc" -ne 0 ]; then
@@ -233,6 +333,7 @@ fi
 upgradable=$(printf '%s\n' "$apt_list_raw" | tail -n +2)
 if [ -z "$upgradable" ]; then
   ok "nothing to upgrade — exiting"
+  stamp_success
   log "Auto-update COMPLETE (no-op)"
   exit 0
 fi
@@ -288,6 +389,15 @@ if [ -z "$installed_kernel" ]; then
   warn "could not determine installed proxmox kernel — skipping reboot decision (manual check recommended)"
 elif [ "$running_kernel" != "$installed_kernel" ]; then
   log "  running kernel $running_kernel != latest installed $installed_kernel — reboot required"
+  # Record what is running so proxmox-guest-restore.service can bring it back.
+  # Failing here is fatal BEFORE the reboot is scheduled: the unit fails, the
+  # marker is not stamped, and backup-health-check check 6 alarms, instead of
+  # the onboot=0 lab guests silently staying down after the reboot.
+  if record_running_guests "$RESTORE_LIST"; then
+    ok "recorded $(grep -vc '^# boot_id ' "$RESTORE_LIST") guest(s) for post-reboot restore ($RESTORE_LIST)"
+  else
+    fatal "could not record running guests to $RESTORE_LIST — reboot NOT scheduled; reboot by hand and restart the guests that were running" 2
+  fi
   sync   # flush log + dpkg state to disk before kernel hands off
   # +1 minute gives systemd time to ack and gives any open shell a chance to bail.
   # PIPESTATUS check so a failed shutdown doesn't get masked by tee's 0 exit and
@@ -347,6 +457,7 @@ if [ "$reboot_scheduled" = 0 ]; then
   log "  pruned $pruned old snapshot(s)"
 fi
 
+stamp_success
 log "===================================================="
 if [ "$reboot_scheduled" = 1 ]; then
   log "Proxmox auto-update END — reboot pending"

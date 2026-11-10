@@ -1,0 +1,19 @@
+[Unit]
+Description=Restart guests that were running before a proxmox-monthly-update reboot
+Documentation=file:///usr/local/sbin/proxmox-guest-restore.sh
+# pve-guests.service (which requires pmxcfs) starts the onboot=1 guests first;
+# this only fills in the rest. HA units listed so HA recovery has run first, and
+# time-sync.target for the best clock available (reboot identity is the kernel
+# boot_id, so the script does not depend on it).
+After=pve-guests.service pve-cluster.service pve-ha-lrm.service pve-ha-crm.service time-sync.target
+ConditionPathExists=/var/lib/proxmox-monthly-update/restore-guests
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/proxmox-guest-restore.sh
+# Worst case: 16 guests x (30 s status + 120 s start) + 15 s settle + 16 x 30 s re-check ~ 49 min.
+# If systemd kills it, the list stays behind and backup-health-check alarms.
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

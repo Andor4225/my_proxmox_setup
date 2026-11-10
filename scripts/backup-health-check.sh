@@ -12,6 +12,16 @@
 #   3. restic repo present + newest snapshot is recent (backup job still running)
 #   4. Veeam job present + newest .vbk/.vib restore point is recent
 #   5. No USB bridge resets / I/O errors in the kernel log in the last 24h
+#   6. The Proxmox auto-updater is succeeding: its last-success marker exists and
+#      is < UPDATE_STALE_DAYS old, and its last unit run did not fail (unless a
+#      later success superseded it). Added 2026-11-10 after the updater failed
+#      silently on every run 2026-09-06..11-06. Skipped (BHC_SKIP_UPDATER_CHECK=1)
+#      only when proxmox-monthly-update calls this script as its pre-flight gate.
+#      Also warns when the post-update guest restore list outlives RESTORE_GRACE_MIN
+#      (proxmox-guest-restore.service did not bring the lab guests back).
+#
+# Test seams: BHC_LOG, BHC_UPDATE_MARKER and BHC_RESTORE_LIST override the paths below, so the
+# whole script can run end to end against a sandbox without touching live state.
 #
 # Exit: 0 = all healthy, 1 = warning(s), 2 = failure(s).
 # Output is appended to /var/log/backup-health-check.log and echoed to stdout,
@@ -22,7 +32,7 @@
 set -uo pipefail
 export LC_ALL=C   # stable numeric formatting for find's %T@ epoch values
 
-LOG=/var/log/backup-health-check.log
+LOG=${BHC_LOG:-/var/log/backup-health-check.log}
 RESTIC_MOUNT=/mnt/backup-files
 RESTIC_REPO=/mnt/backup-files/restic
 VEEAM_DIR=/mnt/backup-images
@@ -31,6 +41,12 @@ VEEAM_STALE_HOURS=48           # Veeam runs daily incrementals; 48h leaves margi
 SPACE_WARN=85                  # percent used -> warning
 SPACE_FAIL=95                  # percent used -> failure
 IO_TIMEOUT=60                  # seconds — cap on any single USB-touching command
+UPDATE_MARKER=${BHC_UPDATE_MARKER:-/var/lib/proxmox-monthly-update/last-success}
+UPDATE_LOG=/var/log/proxmox-monthly-update.log
+UPDATE_UNIT=proxmox-monthly-update.service
+UPDATE_STALE_DAYS=20           # runs on the 6th + 20th (<= 17 days apart): one missed run trips this
+RESTORE_LIST=${BHC_RESTORE_LIST:-/var/lib/proxmox-monthly-update/restore-guests}
+RESTORE_GRACE_MIN=60           # the list lives ~2 min (reboot +1m, then boot) when restore works
 
 WARN=0
 FAIL=0
@@ -62,6 +78,69 @@ check_age() {
     warn "$label newest item is $(( age_s / 3600 ))h old (> ${stale_h}h) — backup job may have stalled"
   else
     ok "$label newest item is $(( age_s / 3600 ))h old"
+  fi
+}
+
+# check_updater <marker> <unit-result> <unit-exit-epoch> <update-log> <stale-days>
+# Ground truth is the marker the updater writes only after a completed run. Every
+# unknown (missing, malformed, future-dated) WARNs; nothing resolves to "all clear".
+check_updater() {
+  local marker="$1" result="$2" exit_epoch="$3" ulog="$4" stale_d="$5" last="" age_s lastfail
+  # Exactly one line of digits (command substitution drops the final newline).
+  # Nothing is stripped from inside, so "123\n456" stays malformed.
+  if [ -r "$marker" ]; then
+    last=$(head -c 33 "$marker" 2>/dev/null)
+  fi
+  # A failed unit run alarms, unless a later success (e.g. a manual run) superseded it.
+  if [ -n "$result" ] && [ "$result" != "success" ]; then
+    if [[ "$last" =~ ^[0-9]{1,12}$ ]] && [[ "$exit_epoch" =~ ^[0-9]{1,12}$ ]] && [ "$last" -gt "$exit_epoch" ]; then
+      ok "auto-update unit result '$result' was superseded by a later successful run"
+    else
+      lastfail=$(grep -E '\[FAIL\]' "$ulog" 2>/dev/null | tail -1 | sed -E 's/^[^ ]+ \[FAIL\] +//' | cut -c1-160)
+      warn "last proxmox-monthly-update run failed (result=$result): ${lastfail:-see $ulog}"
+    fi
+  fi
+  if [ ! -e "$marker" ]; then
+    warn "no successful auto-update recorded ($marker missing) — host may be falling behind on patches"
+    return
+  fi
+  if ! [[ "$last" =~ ^[0-9]{1,12}$ ]]; then
+    warn "auto-update marker $marker is unreadable or malformed"
+    return
+  fi
+  age_s=$(( NOW - last ))
+  if [ "$age_s" -lt -300 ]; then
+    warn "auto-update marker is $(( -age_s / 60 )) min in the future — clock skew"
+  elif [ "$age_s" -gt $(( stale_d * 86400 )) ]; then
+    warn "last successful auto-update was $(( age_s / 86400 ))d ago (> ${stale_d}d) — host is falling behind on patches"
+  else
+    ok "last successful auto-update $(( age_s / 86400 ))d ago"
+  fi
+}
+
+# check_guest_restore <list> <grace-min>
+# proxmox-guest-restore.service archives the list only after every guest it names
+# is running, so a list that outlives the grace window means guests stayed down
+# (restore failed, refused a stale list, or never ran).
+check_guest_restore() {
+  local list="$1" grace="$2" mtime age_m n
+  if [ ! -e "$list" ]; then
+    ok "no pending post-update guest restore"
+    return
+  fi
+  mtime=$(stat -c %Y "$list" 2>/dev/null)
+  if ! [[ "$mtime" =~ ^[0-9]{1,12}$ ]]; then
+    warn "guest restore list $list exists but its age is unreadable — check proxmox-guest-restore.service"
+    return
+  fi
+  age_m=$(( (NOW - mtime) / 60 ))
+  n=$(grep -Ec '^(CT|VM) ' "$list" 2>/dev/null) || n=0
+  if [ "$age_m" -lt -5 ]; then
+    warn "guest restore list $list is dated $(( -age_m )) min in the future (clock skew) — check proxmox-guest-restore.service"
+  elif [ "$age_m" -gt "$grace" ]; then
+    warn "$n guest(s) from the last update reboot were not restored (list $list is ${age_m} min old) — see journalctl -u proxmox-guest-restore; start them by hand, then delete the list"
+  else
+    ok "guest restore list written ${age_m} min ago ($n guest(s)) — reboot/restore in progress"
   fi
 }
 
@@ -159,6 +238,20 @@ if usb_log=$(journalctl -k --since "1 day ago" --no-pager 2>/dev/null); then
   fi
 else
   warn "could not read kernel log (journalctl failed) — USB error check skipped"
+fi
+
+# --- 6. Proxmox auto-update health (see header). ---
+if [ "${BHC_SKIP_UPDATER_CHECK:-0}" = 1 ]; then
+  log "       skipping auto-update check (pre-flight call from proxmox-monthly-update)"
+else
+  upd_result=$(systemctl show "$UPDATE_UNIT" -p Result --value 2>/dev/null) || upd_result=""
+  upd_exit_ts=$(systemctl show "$UPDATE_UNIT" -p ExecMainExitTimestamp --value 2>/dev/null) || upd_exit_ts=""
+  upd_exit_epoch=""
+  if [ -n "$upd_exit_ts" ]; then
+    upd_exit_epoch=$(date -d "$upd_exit_ts" +%s 2>/dev/null) || upd_exit_epoch=""
+  fi
+  check_updater "$UPDATE_MARKER" "$upd_result" "$upd_exit_epoch" "$UPDATE_LOG" "$UPDATE_STALE_DAYS"
+  check_guest_restore "$RESTORE_LIST" "$RESTORE_GRACE_MIN"
 fi
 
 # --- summary ---

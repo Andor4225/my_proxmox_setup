@@ -4,6 +4,75 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-11-10
+
+**A systems check found the host 217 packages behind: `proxmox-monthly-update` had aborted at pre-flight on all 5 runs since the July update, and nothing alerted. The gate was fixed, a staleness alarm was added to the health check, and the update was run by hand (PVE 9.2.26, kernel 7.0.14-28-pve).**
+
+### Diagnosis
+- **Runs aborted:** 2026-09-06, 09-20, 10-06, 10-20 and 11-06 all stopped at pre-flight. The last successful update was the July run (last boot 2026-07-06).
+- **Cause:** the gate refused to upgrade when ANY SMB session existed (`smbstatus --processes`). The Windows PC keeps both backup shares mapped 24/7, so an idle session always existed.
+- **Why nobody knew:** the unit has no `OnFailure`, and the health check did not look at update freshness.
+
+### Fixes
+- **`scripts/proxmox-monthly-update.sh`:**
+  - New `backup_activity()` defers only on real activity: a file open over SMB (`smbstatus -L --json`, `open_files`; a missing or non-object value fails closed), or any write under `/mnt/backup-files` or `/mnt/backup-images` in the last 15 min.
+  - New `check_backup_quiet()` first requires each backup path to be a mounted ext4 disk (a bare unmounted dir used to scan as quiet). It runs twice: in pre-flight and again right before apt, to close the check-to-apt gap.
+  - On success it stamps `/var/lib/proxmox-monthly-update/last-success` (epoch, atomic write).
+  - It calls the health check with `BHC_SKIP_UPDATER_CHECK=1`, so a failed previous run cannot deadlock the next one.
+  - `fatal()` no longer appends the exit code to its message. The header comment is fixed (it said bi-monthly / first Thursday).
+- **`scripts/backup-health-check.sh` check 6:** WARNs when the marker is missing, malformed (must be 1 to 12 digits on one line), future-dated, or older than 20 days, and when the updater unit's last Result was a failure unless a later success superseded it. Skipped only when `BHC_SKIP_UPDATER_CHECK=1`. New test seams: `BHC_LOG`, `BHC_UPDATE_MARKER`. The exit code already feeds OpenClaw's Discord alert (`openclaw/pi-mirror/host-scripts/proxmox-backup-health-check.sh` reads `ExecMainStatus` and forwards the `[WARN]`/`[FAIL]` lines); that channel was verified by reading it.
+- **API token `root@pam!claude-mcp`** renewed by Gavin; it now expires **2027-12-31** (CLAUDE.md said ~2026-10-16).
+
+### Tests and review
+- New `scripts/tests/test-update-gates.sh`: extracts the real functions, runs in a `/tmp` sandbox, and includes an end-to-end health-check run. Run on the host with `bash test-update-gates.sh <scripts-dir>`. 39 pass, 13/13 mutants killed. A live SMB open from Windows was detected by the real gate.
+- **Codex + agy via the dual-review runner.** Round 1: Codex FAIL (1 HIGH: unmounted bare dir read as quiet; 2 MEDIUM: marker lines merged by whitespace stripping, and a TOCTOU between check and apt); agy PASS. All three were fixed. Codex round 2: PASS.
+
+### Deploy and update run
+- Deployed to `/usr/local/sbin`, hashes verified, exec bits kept. Backups: `*.bak-20261110`.
+- Started manually with `systemctl start` at 10:21. The gate passed both checks; 17 guest snapshots `auto_update_2026_11` were taken. 217 packages installed 10:22 to 10:25; new kernel `7.0.14-28-pve`, rebooted 10:26, back at 10:30.
+- **Now pve-manager 9.2.26, running kernel 7.0.14-28-pve**, 0 upgradable, no failed units. The samba-lock nftables rules reloaded (loaded by `samba-lock.service`; `nftables.service` is disabled by design). All mounts ext4, Tailscale up.
+- The 13 running guests with onboot=0 (VM 110, CT 201-207, CT 211-215) were restarted from a saved pre-update list; all 16 previously-running guests are running. dfwagentops.com returns 200 (CT 300's nginx listens on 127.0.0.1:80 only, tunnel-fronted, and drops unknown Host headers).
+- The health check afterwards: 0 failures, 0 warnings, including "last successful auto-update 0d ago".
+
+### Measured facts
+- Windows restic ("Restic Backup - User Files") runs **every hour at :03**, not only nightly. Median 1.8 min, p90 6.2 min, max 63.7 min. Every 02:xx run in November ended by 02:09.
+- The Windows SMB client holds closed handles about 10 min after restic exits (exit 10:05:40, 261 handles cleared 10:15:29).
+- So the 02:30 slot is quiet. A manual run must start 15+ min after the last restic write and before the next :03. Veeam runs nightly at 04:30.
+
+### Leftovers
+- Snapshots: the `auto_update_2026_06` and `_07` snapshots on CT 300 and VM 100 were deleted by hand (Gavin approved). They had been kept because prune runs only on no-reboot runs. Both guests keep `auto_update_2026_11` and the 11-08 vzdump.
+- Kernels: 6 superseded kernels were purged (6.17.2-1, 6.17.13-11/-13/-14, 7.0.2-6, 7.0.6-2), keeping the three `proxmox-boot-tool` auto-selects: **7.0.14-28** (running), **7.0.14-3** (previous), **6.17.13-21** (older-series fallback). The GRUB menu lists exactly those three, the default is 7.0.14-28, and `/boot` has 71 GB free. Log: `/root/kernel-purge-20261110.log`.
+- **Watch the Veeam disk:** `/mnt/backup-images` is at 67% (35% after the 11-01 reset). The `.vbk` grew 155 to 185 GB, and the 11-10 `.vib` was 66 GB against ~20 GB normal. The health check warns at 85%.
+
+### Post-update guest restore (new)
+- **Why:** the lab guests (CT 201-207, 211-215, VM 110) are onboot=0 on purpose. A power cut shouldn't bring the vulnerable CTF lab up, but they stayed down after today's updater reboot; 13 had to be started by hand.
+- **Updater:** `record_running_guests`, just before `shutdown -r`, writes `# boot_id <uuid>` plus `CT/VM <id>` lines atomically to `/var/lib/proxmox-monthly-update/restore-guests`. It merges any unresolved earlier list, so a failed restore can't be silently dropped. If recording fails, the updater exits fatally with no reboot, and check 6 alarms.
+- **`scripts/proxmox-guest-restore.sh` + `systemd/proxmox-guest-restore.service`:** oneshot, `After=pve-guests pve-cluster pve-ha-* time-sync.target`, ConditionPathExists on the list, `TimeoutStartSec=3600`, enabled. The script:
+  - refuses a list with a missing or non-UUID `boot_id`, one written in the current boot, one older than 6 h, or one dated more than 1 h ahead;
+  - starts stopped guests (status timeout 30 s, start timeout 120 s);
+  - re-checks every guest after a settle period;
+  - archives the list to `.done` only if all are running and the file is unchanged (sha256); otherwise it keeps the list and exits 1.
+- **`backup-health-check.sh` check 6:** WARNs if the list outlives 60 min, or is future-dated.
+- **Tests:** new `scripts/tests/test-guest-restore.sh` (62 pass, stub pct/qm). 22/23 mutants killed; the survivor is equivalent, because the final re-check also fails an unknown guest. The existing suite is still 39/39. Real `pct`/`qm list` output parsed into the same 16 guests as the hand-made list.
+- **Review:**
+  - Round 1: Codex FAIL (3H/3M), agy PASS-WITH-FIXES (1H/2M/1L). Fixed: list merge, final re-check, status timeouts, `boot_id` instead of clocks, future-date warn, HA ordering. Rejected: the passthrough/HA policy finding, since the host has 0 HA resources and no hostpci/usb passthrough.
+  - Round 2: Codex FAIL (2H/1M). Fixed: a failed status call no longer trusted, archive refused if the list changed, strict UUID check.
+  - Round 3: Codex PASS.
+- **Deploy:** sha256 verified; backups `*.bak-20261110b`. Live test: CT 205 stopped, a list with a foreign `boot_id` written, unit started → CT 205 running, list archived, health check 0 warnings. (`restore-guests.done` holds that test list.)
+
+### Kali firewall (UniFi gateway 192.168.1.1, Network 10.6, legacy firewall)
+- **Audit (read-only, local API):** Kali sits on `Isol-Net`, VLAN **77** (the docs said VLAN 70). It could reach **no** lab host. `LAN_IN` #20016 `Isol - Block RFC1918` drops Isol-Net → all private IPs, with no allow rule above it. The `CTF Lab` address group (`.201-.205`) was referenced by no rule, so the whitelist the docs described did not exist. Proxmox's SSH log shows no logins from `192.168.77.x` ever.
+- **Change, later abandoned (see Result; Gavin approved; targets and source chosen by Gavin):** the unused `CTF Lab` group was renamed **`Kali Lab Targets`**, with members `.201-.207` (FAE mgmt) and `.211-.215` (CTF).
+- **New rule:** `LAN_IN` **#20011** `Kali - Allow lab targets`: accept, source network Isol-Net, all protocols, logging off. It sits above #20016; the readback confirmed the order.
+- **Excluded on purpose:** Proxmox `.147` and CT 300 `.220`.
+- **How it was done:** fields cloned from rule #20016, so the schema matches. The pre-change rule and group JSON was saved first, for rollback. The API key was read from `credentials/.env` by name and never printed.
+- **Result: it did not work.** Gavin confirmed the device `gemini` (192.168.77.108) is the Kali machine. His `ping -c 10 192.168.10.211` lost 100%, and a 5-minute `tcpdump` on `vmbr0` for that host saw **0 packets**. So the gateway drops the traffic leaving Isol-Net, before any lab host. CT 211 itself is fine: gateway `.1`, firewall policy accept, answers the host's ping.
+- **Cause (inferred):** Isol-Net's Network Isolation, which the API does not expose and which appears to take precedence over custom `LAN_IN` rules.
+- **Decision (Gavin):** keep isolation ON and remove rule #20011 himself. Kali deliberately has no LAN path to the labs.
+- **Option offered and declined:** isolation OFF, plus a NEW-connections drop into Isol-Net.
+
+---
+
 ## 2026-11-01
 
 **Second Veeam capacity crunch. The Windows "Backup Heartbeat" posted a Veeam Warning every ~6h from 10/31. The cause was Veeam's "Defragment and compact full backup file" step, which cannot fit on the 469 GB target. Fixes: compaction turned off, C: trimmed by 85 GiB, chain reset, and the heartbeat monitor rewritten.**
