@@ -4,6 +4,26 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-11-19
+
+**Open-thread cleanup, and the dual-review `missing codex_final.md` retention change is PARKED.**
+
+- **UniFi rule #20011 is deleted** (Gavin confirmed). Kali stays on isolated Isol-Net, and CLAUDE.md is updated.
+- **The Discord webhook rotation is closed.** It was a stale carry-over from the 11-01 agy leak. The set was rotated on 11-01 and restored to every copy on 11-03 (OC-106). What remains is openclaw's own optional item, in `OpenClawToDo.md`: rotating `PI_ALERT_WEBHOOK` and `NIKKI_OPS_DISCORD_WEBHOOK`.
+- **Retention for a normally finished codex leg with a missing `codex_final.md` is PARKED** (Gavin's call). The 11-18 note said this case blocks openclaw's retention copy, which was wrong. Openclaw scanned its 62 `summary.json` runs and found 0 with a `missing` assessment, and retention works (2 folders retained). The value is also low: retention copies an allowlist only (REVIEW_TASK.md, FAILOVER_REQUIRED.txt, codex_final.md, agy_out.md, summary.json) and never `*_stdout.txt`/`*_stderr.txt`. A run with a missing `codex_final.md` would therefore keep only its summary, its marker and the other leg's report. **Revisit only if a real run hits this case.** Openclaw's spec for it:
+  - Change only the retention-skip predicate. Do not relabel `missing` as `incomplete` in `secretShapedOutputFiles`, because SKILL.md triage rules 0-3 reason about `missing`.
+  - Allow retention only if:
+    - the sole missing file is `codex_final.md`;
+    - the leg's stdout and stderr are present and scanned clean, with no hits and no scanError (a missing stdout or stderr keeps blocking);
+    - every existing skip still applies;
+    - the leg stays INVALID (exit 3) and stays in FAILOVER_REQUIRED.
+  - Tests, each one falsified:
+    - missing final, clean logs → retained, with no codex files in the copy and the leg still INVALID;
+    - missing final plus missing `codex_stderr.txt` → not retained, with the exact retainNote;
+    - missing final, clean logs, out-of-scope read → not retained.
+  - E2E tests must set `DUAL_REVIEW_RETAIN_ROOT` and keep the real-root and `C:\Logs` guards.
+  - Process: staged copy, dual review with Code Reviewer failover, all 4 suites under 5.1 and pwsh 7 from a non-pwsh parent, and deploy only on Gavin's approval. Openclaw will log the predicate change in its own changelog if it ships.
+
 ## 2026-11-18
 
 **Dual-review runner hardening: Omarchy port verified, then back-ported to the Windows runner.** This closes the carried-over open thread to port the runner hardening to the Omarchy copy. The runner lives in the skill dir (`~/.claude/skills/dual-review`), which is not in git, so this log is its record.
@@ -57,7 +77,7 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
     - `gci Env:`;
     - splatted paths.
   - Timing tests are ratio-based with a calibrated control, but remain load-sensitive.
-  - A `missing` file on a leg that finished normally still blocks retention. Changing that is optional and left for Gavin.
+  - A `missing` file on a leg that finished normally still blocks retention. Changing that is optional and left for Gavin. _(2026-11-19: parked; see that entry.)_
 
 ## 2026-11-10
 

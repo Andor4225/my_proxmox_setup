@@ -114,7 +114,7 @@ Disable a timer: `systemctl disable --now <name>.timer`. Re-enable: `systemctl e
 
 Kali sits on UniFi network **`Isol-Net`, VLAN 77** (`192.168.77.0/24`, network isolation ON); the lab is on **`Trusted`, VLAN 10** (`192.168.10.0/24`). Gateway `192.168.1.1`, UniFi Network 10.6, legacy (rule-based) firewall.
 - **Kali has NO LAN path to the labs, by Gavin's choice (2026-11-10).** `LAN_IN` #20016 `Isol - Block RFC1918` drops Isol-Net → all private IPs, and Isol-Net's **Network Isolation** setting blocks inter-VLAN traffic regardless of custom rules.
-- **What was tried:** an accept rule (#20011, Isol-Net → group `Kali Lab Targets`, above #20016) still saw 0 packets reach `vmbr0`, so isolation wins over custom rules. Gavin kept isolation ON and is removing that rule. The `Kali Lab Targets` address group (formerly the unused `CTF Lab`) may remain.
+- **What was tried:** an accept rule (#20011, Isol-Net → group `Kali Lab Targets`, above #20016) still saw 0 packets reach `vmbr0`, so isolation wins over custom rules. Gavin kept isolation ON and has deleted that rule (confirmed 2026-11-19). The `Kali Lab Targets` address group (formerly the unused `CTF Lab`) may remain.
 - **To open access later:** isolation must go OFF, with an explicit `LAN_IN` drop of NEW connections into Isol-Net replacing it. That needs Gavin's decision. Never broaden Isol-Net → VLAN 10.
 
 ## Planned (Not Yet Built)
