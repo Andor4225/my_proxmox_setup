@@ -4,6 +4,61 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-11-18
+
+**Dual-review runner hardening: Omarchy port verified, then back-ported to the Windows runner.** This closes the carried-over open thread to port the runner hardening to the Omarchy copy. The runner lives in the skill dir (`~/.claude/skills/dual-review`), which is not in git, so this log is its record.
+
+### Omarchy (Linux) port
+- I handed the work to the Omarchy Claude Code session over herdr `hc`, with a gitleaks-clean, hash-verified snapshot of the Windows runner.
+- The Omarchy session did the port and Gavin approved the live swap there. Its report: `~/staging/dual-review-port-20261118/PORT-REPORT.md` on Omarchy.
+- **The report is stale:** it says nothing live changed, but the swap happened afterwards (15:50, backup `~/.claude/skill-backups/dual-review.bak.20261118-155015`).
+- Verified from Windows: the live runner is byte-identical to the staged port, and the suites pass against live (42/190/447) with the test trap never hit. `~/.codex/AGENTS.md` there gained a marker-gated "dual-review runs come first" section; backup `AGENTS.md.bak.20261118-160222`.
+- hc limitation: a remote terminal can `hc send` only to the terminal that started it, so the Omarchy session could not report back. Launch remote agents with `hc run --on` when a reply is needed.
+
+### Windows back-port (Gavin approved the swap)
+- **Coordination:** the openclaw session (failover marker + retention, 15:55) and the AI_Brain session agreed to hold off runner edits during the back-port.
+- **Base:** live runner `4e3ba120dae7`. I re-checked it immediately before copying.
+- **Five items from Omarchy's `BACKPORT-FOR-WINDOWS.md`:**
+  - a launched Codex leg with no stderr sets `outOfScopeReadsError` = `MissingStderr`;
+  - whole-tree search roots are reported: `~`, `$HOME`, `$env:USERPROFILE/HOMEDRIVE/HOMEPATH/SystemDrive/APPDATA/LOCALAPPDATA/OneDrive/SystemRoot/ProgramData`, `%X%`, `X:\`, `\`, `/`, `..`, wildcards `\*`/`X:*`, msys `/c/`, all case-insensitive, quoted or not, and in the doubled-backslash form Codex logs;
+  - quoted root words glued to a path (`"$HOME"\.env`) are read as one path;
+  - timed-out legs: output files with zero hits, or a missing final report, are labelled `incomplete` (no rotate line, still retained). Any hit, or a cut-off secret near EOF (`Test-SecretTailCut`), keeps the alarm;
+  - the Codex prompt now starts with `DUAL-REVIEW RUN: read-scoped`.
+- **Also fixed in review:** a trailing `..` was trimmed, so a read of OutDir's parent counted as in scope. This bug was pre-existing in the live runner. A quadratic lambda guard was also fixed.
+- **Work method:** a subagent worked on a scratchpad copy only. Every fix got a red-first test and a mutant that turns it red.
+- **Suites:** 36 / 176 / 757 / 89 before, 36 / 301 / 819 / 89 after, green under Windows PowerShell 5.1 and pwsh 7. Run against the staged copy and again against live. Real retention and `C:\Logs\dual-review` were unchanged.
+- **Review:**
+
+  | Round | Codex | Claude Code Reviewer |
+  |---|---|---|
+  | 1 | PASS-WITH-FIXES, 2H | PASS-WITH-FIXES, 2H/4M |
+  | 2 | FAIL | FAIL |
+  | 3 | PASS-WITH-FIXES | PASS-WITH-FIXES |
+  | 4 (delta) | PASS-WITH-FIXES, 2M | — |
+  | 5 (delta) | PASS | — |
+
+  - agy was blocked by the secret-store guard on every run (the runner names `webhook-map.json`), so the Claude Code Reviewer stood in for it each round, per Gavin's policy.
+  - **Round 2, Codex report kept closed (rule 0):** one flagged path, `\\Windows\\outside.txt`, is UNC-shaped with host `Windows`, so `CheckHostName` returned `Dns` and the path could not be confirmed absent. The Code Reviewer served as that leg's failover.
+  - **Round 4, 11-06 absent-path exception applied:** the only flagged path, `C:\fake\out`, does not exist. `outOfScopeReadsError` was false and there were no store refs, so the report was opened. Its probe-like hits were bare `-----BEGIN` headers with no key material.
+  - The input-side real-looking hit in rounds 2-4 was AWS's documented example access key (the one ending `EXAMPLE`) in the test fixtures. Nothing to rotate.
+- **Deploy:**
+  - Runner `90455f1b788e`, SKILL.md `00d9eb5a051a`, test_agy_scope `fb47cd46ec82`, test_shape_files `c6a774f03c79`.
+  - Backups: `~/.claude/skills/dual-review/backup-20261118-backport/` (7 files) and `~/.codex/AGENTS.md.bak-20261118`.
+  - `~/.codex/AGENTS.md` gained the marker-gated section at the top.
+  - Live smoke review: the marker is line 1 of `codex_prompt.txt`, with 0 out-of-scope reads and no vault paths in the exec log.
+- **Accepted residuals (the detector is a backstop, not a control):**
+  - Over-reports:
+    - a quoted path literal in an assignment or `-match` is counted as a read (AI_Brain hit this live: `$a = 'C:\\Users\\Gavin'`);
+    - single-letter `x:` outside Python `lambda`/`case`/`def`;
+    - `$env:HOMEDRIVE\` reported twice.
+  - Under-reports:
+    - a bare `/` between two plain words (`ls / foo`);
+    - a cut secret whose prefix is more than 120 chars back with no full match;
+    - `gci Env:`;
+    - splatted paths.
+  - Timing tests are ratio-based with a calibrated control, but remain load-sensitive.
+  - A `missing` file on a leg that finished normally still blocks retention. Changing that is optional and left for Gavin.
+
 ## 2026-11-10
 
 **A systems check found the host 217 packages behind: `proxmox-monthly-update` had aborted at pre-flight on all 5 runs since the July update, and nothing alerted. The gate was fixed, a staleness alarm was added to the health check, and the update was run by hand (PVE 9.2.26, kernel 7.0.14-28-pve).**
