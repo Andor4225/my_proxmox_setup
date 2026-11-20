@@ -1,6 +1,7 @@
 #!/bin/bash
-# test-update-gates.sh - tests for the auto-updater's backup-activity gate
-# (proxmox-monthly-update.sh: backup_activity) and the health check's updater
+# test-update-gates.sh - tests for the auto-updater's backup-activity gate and
+# snapshot naming/retention (proxmox-monthly-update.sh: backup_activity,
+# snapshot_tag, snap_expired) and the health check's updater
 # alarm (backup-health-check.sh: check_updater + the whole script end to end).
 #
 # The REAL functions are extracted from the scripts (not copies), and every path
@@ -66,6 +67,38 @@ else
   echo "SKIP  unreadable-subtree case (root bypasses permissions)"
 fi
 chmod 755 "$A/restic"
+
+# ---------------- snapshot naming + retention ----------------
+src=$(extract "$UPD" snap_expired); [ -n "$src" ] || { echo "cannot extract snap_expired"; exit 2; }; eval "$src"
+src=$(grep -m1 '^snapshot_tag() {.*}$' "$UPD"); [ -n "$src" ] || { echo "cannot extract snapshot_tag"; exit 2; }; eval "$src"
+t1=$(snapshot_tag "2026-11-10 10:22"); t2=$(snapshot_tag "2026-11-20 02:38")
+expect "tag format is YYYY_MM_DD_HHMMSS"                             2026_11_20_023800 "$t2"
+if [ "$t1" != "$t2" ]; then pass "two runs in one month get different names (the 2026-11-20 collision)"; else fail "same-month runs collide: $t1"; fi
+if [ "$(snapshot_tag '2026-11-20 02:38')" != "$(snapshot_tag '2026-11-20 09:15')" ]; then pass "same-day rerun gets a different name"; else fail "same-day rerun collides"; fi
+if [ "$(snapshot_tag '2026-11-20 02:38:05')" != "$(snapshot_tag '2026-11-20 02:38:50')" ]; then pass "same-minute rerun gets a different name"; else fail "same-minute rerun collides"; fi
+n="auto_update_$t2"
+if [ ${#n} -le 40 ] && [[ $n =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]; then pass "name is a valid Proxmox snapshot id ($n)"; else fail "invalid snapshot id: $n"; fi
+se() { snap_expired "$1" "$2"; echo $?; }
+expect "new name before cutoff -> expired"                          0 "$(se auto_update_2026_09_20_023800 2026_09_21)"
+expect "new name on the cutoff day -> kept"                         1 "$(se auto_update_2026_09_21_023800 2026_09_21)"
+expect "new name after cutoff -> kept"                              1 "$(se auto_update_2026_11_20_023800 2026_09_21)"
+expect "legacy month name, earlier month -> expired"                0 "$(se auto_update_2026_08 2026_09_21)"
+expect "legacy month name, cutoff month -> kept (old month rule)"   1 "$(se auto_update_2026_09 2026_09_21)"
+expect "legacy month name, later month -> kept"                     1 "$(se auto_update_2026_11 2026_09_21)"
+expect "manual auto_update_foo -> never pruned"                     1 "$(se auto_update_before_upgrade 2099_01_01)"
+expect "other-prefix name -> never pruned"                          1 "$(se pre_kernel_2020_01_01_000000 2099_01_01)"
+expect "bare tag, no auto_update_ prefix -> never pruned"           1 "$(se 2020_01_01_000000 2099_01_01)"
+expect "near-miss format (no minutes) -> never pruned"              1 "$(se auto_update_2020_01_01 2099_01_01)"
+expect "near-miss format (HHMM, no seconds) -> never pruned"        1 "$(se auto_update_2020_01_01_0000 2099_01_01)"
+expect "suffixed manual keep copy -> never pruned (end anchor)"     1 "$(se auto_update_2020_01_01_000000_keep 2099_01_01)"
+expect "letter-prefixed tag -> never pruned"                        1 "$(se auto_update_x2020_01_01_000000 2099_01_01)"
+expect "digit-prefixed tag -> never pruned (start anchor)"          1 "$(se auto_update_1_2020_01_01_000000 2099_01_01)"
+expect "suffixed legacy name -> never pruned"                       1 "$(se auto_update_2020_01_keep 2099_01_01)"
+expect "empty cutoff (date failed) -> prunes nothing"               1 "$(se auto_update_2020_01_01_000000 '')"
+expect "malformed cutoff -> prunes nothing"                         1 "$(se auto_update_2020_01_01_000000 2099_01)"
+expect "cutoff month 00 (not a date) -> prunes nothing"             1 "$(se auto_update_2026_01_01_000000 2099_00_00)"
+expect "cutoff Feb 31 (not a date) -> prunes nothing"               1 "$(se auto_update_2026_01_01_000000 2026_02_31)"
+expect "real calendar cutoff still prunes (control)"                0 "$(se auto_update_2026_01_01_000000 2026_02_28)"
 
 # ---------------- check_backup_quiet (mount verification + live gate) ----------------
 src=$(extract "$UPD" check_backup_quiet); [ -n "$src" ] || { echo "cannot extract check_backup_quiet"; exit 2; }; eval "$src"

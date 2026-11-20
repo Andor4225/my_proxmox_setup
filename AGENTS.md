@@ -14,7 +14,7 @@ Deep architecture/operational detail lives in topic-specific files. **Read the r
 | Windows backups | `windows-backup.md` + `plans/windows-backup-runbook.md` | Touching Samba shares or backup infrastructure |
 
 ## Server
-- **Proxmox VE 9.2.3** (kernel `7.0.6-2-pve`, fallback `6.17.13-11-pve`) at `192.168.10.147:8006`
+- **Proxmox VE 9.2.32** (kernel `7.0.14-30-pve`, fallbacks `7.0.14-28-pve`, `7.0.14-3-pve`, `6.17.13-21-pve`; updated 2026-11-20) at `192.168.10.147:8006`
 - **Node name**: `pve`
 - **Model**: HP Laptop 15-dw3xxx
 - **CPU**: Intel i3-1115G4 @ 3.00GHz (2 cores / 4 threads, boost 4.1GHz, 28W TDP)
@@ -81,7 +81,7 @@ Two systemd timers run unattended maintenance on the host. Both write to plain l
 | Service | Cadence | What it does |
 |---|---|---|
 | `backup-health-check.timer` | daily ~09:00 (RandomizedDelaySec=300) | Verifies OWC mounts, free space, restic + Veeam freshness, USB errors. Exit 0/1/2 consumed by OpenClaw → Discord on non-zero. |
-| `proxmox-monthly-update.timer` | 6th & 20th of every month, 02:30 + RandomizedDelaySec=600 (semi-monthly; changed 2026-07-04 from bi-monthly to cut patch latency) | Pre-flight (free space + backup-health-check + flock on `/var/run/vzdump.lock` + smbstatus + pvesh tasks) → snapshot all CTs/VMs as `auto_update_YYYY_MM` → `apt full-upgrade -y --force-confold --force-confdef` → reboot only if running kernel ≠ latest installed → prune snapshots older than 60 days. Next fire: **Mon 2026-07-06 02:36 CDT**. Note: the unit is still named `proxmox-monthly-update.*` (now a mild misnomer — cadence is twice-monthly). |
+| `proxmox-monthly-update.timer` | 6th & 20th of every month, 02:30 + RandomizedDelaySec=600 (semi-monthly; changed 2026-07-04 from bi-monthly to cut patch latency) | Pre-flight (free space + backup-health-check + flock on `/var/run/vzdump.lock` + smbstatus + pvesh tasks) → snapshot all CTs/VMs as `auto_update_YYYY_MM_DD_HHMMSS` (was month-only until 2026-11-20: the 2nd run of a month collided) → `apt full-upgrade -y --force-confold --force-confdef` → reboot only if running kernel ≠ latest installed → prune snapshots older than 60 days. Next fire: **Mon 2026-07-06 02:36 CDT**. Note: the unit is still named `proxmox-monthly-update.*` (now a mild misnomer — cadence is twice-monthly). |
 
 Script sources live in `scripts/`, unit files in `systemd/`, both deployed to `/usr/local/sbin/` and `/etc/systemd/system/` on the host. Run on demand:
 - `/usr/local/sbin/backup-health-check.sh` (or `systemctl start backup-health-check.service`)

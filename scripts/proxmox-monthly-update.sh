@@ -43,7 +43,35 @@ esac
 LOG=/var/log/proxmox-monthly-update.log
 LOCKFILE=/var/run/proxmox-monthly-update.lock
 DATE_TAG=$(date +%Y-%m-%d)
-SNAPSHOT_TAG=$(date +%Y_%m)
+
+# Snapshot tag: date AND time. A month-only tag (auto_update_YYYY_MM) collided
+# on the second run of a month - the 2026-11-10 manual run took
+# auto_update_2026_11, so the 2026-11-20 timer run got "snapshot name already
+# used" on all 17 guests and refused to upgrade. The time part (to the second)
+# keeps a quick rerun after a failure past the snapshot phase from colliding.
+# auto_update_YYYY_MM_DD_HHMMSS = 30 chars (Proxmox snapshot id limit: 40).
+snapshot_tag() { date -d "${1:-now}" +%Y_%m_%d_%H%M%S; }
+
+# snap_expired <snapshot-name> <cutoff YYYY_MM_DD>: exit 0 only for a snapshot
+# this script created that is older than the cutoff. Never prunes a name it did
+# not make (manual auto_update_foo snapshots are left alone). Legacy month-only
+# names keep their old month-granular rule. A malformed cutoff, or one that is
+# not a real calendar date (2099_00_00, 2026_02_31), prunes nothing.
+snap_expired() {
+  local tag=${1#auto_update_} cutoff=$2
+  [ "$tag" != "$1" ] || return 1
+  [[ $cutoff =~ ^[0-9]{4}_[0-9]{2}_[0-9]{2}$ ]] || return 1
+  [[ $(date -d "${cutoff//_/-}" +%Y_%m_%d 2>/dev/null) == "$cutoff" ]] || return 1
+  if [[ $tag =~ ^[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}$ ]]; then
+    [[ ${tag:0:10} < $cutoff ]]
+  elif [[ $tag =~ ^[0-9]{4}_[0-9]{2}$ ]]; then
+    [[ $tag < ${cutoff:0:7} ]]
+  else
+    return 1
+  fi
+}
+
+SNAPSHOT_TAG=$(snapshot_tag)
 SNAPSHOT_NAME="auto_update_${SNAPSHOT_TAG}"
 PREUPGRADE_DIR="/root/preupgrade-${DATE_TAG}"
 MIN_BOOT_MB=500
@@ -75,6 +103,11 @@ ok()    { log "[OK]    $*"; }
 warn()  { log "[WARN]  $*"; }
 bad()   { log "[FAIL]  $*"; }
 fatal() { bad "$1"; exit "${2:-1}"; }
+
+# A failed `date` would leave SNAPSHOT_NAME as bare "auto_update_": never
+# pruned, and it would collide on the next run. Refuse instead.
+[[ $SNAPSHOT_TAG =~ ^[0-9]{4}_[0-9]{2}_[0-9]{2}_[0-9]{6}$ ]] \
+  || fatal "bad snapshot tag '$SNAPSHOT_TAG' — refusing to run"
 
 # backup_activity <smbstatus-L-json> <quiet-minutes> <mount>...
 # Ground truth for "is a Windows backup writing right now". An idle SMB SESSION is
@@ -422,7 +455,7 @@ fi
 # ============================================================================
 if [ "$reboot_scheduled" = 0 ]; then
   log "Phase 5: cleanup snapshots older than ${SNAPSHOT_RETENTION_DAYS} days"
-  cutoff_ym=$(date -d "${SNAPSHOT_RETENTION_DAYS} days ago" +%Y_%m)
+  cutoff=$(date -d "${SNAPSHOT_RETENTION_DAYS} days ago" +%Y_%m_%d)
   pruned=0
 
   # CTs
@@ -430,9 +463,7 @@ if [ "$reboot_scheduled" = 0 ]; then
     [ -z "$ctid" ] && continue
     while IFS= read -r snap; do
       [ -z "$snap" ] && continue
-      snap_ym=${snap#auto_update_}
-      # Lexicographic compare works for YYYY_MM
-      if [ "$snap_ym" \< "$cutoff_ym" ]; then
+      if snap_expired "$snap" "$cutoff"; then
         log "  pruning CT $ctid snapshot $snap (older than ${SNAPSHOT_RETENTION_DAYS}d)"
         pct delsnapshot "$ctid" "$snap" >>"$LOG" 2>&1 && pruned=$((pruned + 1)) \
           || warn "CT $ctid delsnapshot $snap failed"
@@ -445,8 +476,7 @@ if [ "$reboot_scheduled" = 0 ]; then
     [ -z "$vmid" ] && continue
     while IFS= read -r snap; do
       [ -z "$snap" ] && continue
-      snap_ym=${snap#auto_update_}
-      if [ "$snap_ym" \< "$cutoff_ym" ]; then
+      if snap_expired "$snap" "$cutoff"; then
         log "  pruning VM $vmid snapshot $snap (older than ${SNAPSHOT_RETENTION_DAYS}d)"
         qm delsnapshot "$vmid" "$snap" >>"$LOG" 2>&1 && pruned=$((pruned + 1)) \
           || warn "VM $vmid delsnapshot $snap failed"

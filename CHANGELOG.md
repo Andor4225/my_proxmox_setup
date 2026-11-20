@@ -4,6 +4,35 @@ Dated events and architectural changes for the Proxmox lab. Newest first. For cu
 
 ---
 
+## 2026-11-20
+
+**Updater: snapshot-name collision fixed, upgrade applied (PVE 9.2.32, kernel 7.0.14-30), first real guest restore 16/16. Pi monitor alert noise fixed.**
+
+- **What failed.** The 02:38 timer run, the first unattended run since the 11-10 gate fix, passed every pre-flight check. All 17 snapshots then failed with `snapshot name 'auto_update_2026_11' already used`, and the script refused to upgrade, which is correct fail-safe behaviour. Root cause: snapshot names went down only to the month, `date +%Y_%m`, and the 11-10 manual run had already taken `auto_update_2026_11`. The bug had been there since the 07-04 move to the 6th + 20th. It stayed hidden because the SMB gate aborted every run before the snapshot step from 09-06 to 11-06. Check 6 of the health check caught the failure and alerted at 03:00, as designed.
+- **Fix** (`scripts/proxmox-monthly-update.sh`):
+  - `snapshot_tag()` now produces `YYYY_MM_DD_HHMMSS`, 30 characters (the limit is 40). Seconds also stop a quick same-day rerun from colliding.
+  - The 60-day prune now goes through `snap_expired()`, which: never prunes a name it did not create; keeps legacy `auto_update_YYYY_MM` names on their old month-granular rule; prunes nothing on an empty, malformed or non-calendar cutoff (a `date -d` round-trip).
+  - A top-level guard refuses to run if the tag is malformed (`date` failed).
+- **Review**:
+  - Engineering reviewer: its MEDIUM (an anchor-removal mutant survived) and its tag-guard LOW were both applied.
+  - Codex (`20261120-085528-212-14144`) VALID, FAIL C1/H1:
+    - C1 (a calendar-invalid cutoff such as `2099_00_00`) can't be reached from `date`, but the round-trip check was cheap, so it was applied.
+    - H1 (two runs in the same minute collide) was applied as seconds in the tag.
+  - agy: PASS.
+- **Tests**: `scripts/tests/test-update-gates.sh` now has 64 cases, all passing on the host. 10 of 11 mutants are killed. The survivor removes the cutoff regex, which is now redundant with the round-trip, so the mutant is equivalent. The top-level tag guard was checked live (a bogus tag gives `[FAIL] bad snapshot tag` and rc 1).
+- **Deploy + run.** Deployed to `/usr/local/sbin/` (sha256 matches, mode 755), with a backup at `/root/proxmox-monthly-update.sh.bak-20261120`.
+  - A dry run at 09:03 deferred correctly, because restic's 09:03 run had 6 files open.
+  - The unit was started at 09:23:57 once the backups were quiet. All 17 snapshots were created (`auto_update_2026_11_20_092357`) and 34 packages upgraded, including kernel 7.0.14-30.
+  - It recorded 16 running guests, stamped the success marker, and rebooted at 09:26.
+  - **`proxmox-guest-restore.service` ran for real for the first time:** 16/16 running (13 started, 3 already up), and the list was archived to `.done`.
+  - The health check now shows 0 failures and 0 warnings.
+- **Alert noise** (the OpenClaw-side `proxmox-backup-health-check.sh`; see `OpenClawChangelog.md` 2026-11-20):
+  - The Discord alerts replayed WARNs from September, because the Pi grepped the whole append-only log.
+  - The 06:30 duplicate post came from the Pi rebooting at 06:00, which wiped its `/tmp` dedup state.
+  - Fixed: alerts are limited to the latest run, the state is persistent, dedup now fingerprints the issue lines, and a stale-run guard was added. Deployed to the Pi.
+- **Lesson**: AI_Brain `feedback_run_tag_granularity_vs_cadence.md`.
+- **Docs**: CLAUDE.md (version and kernels, snapshot name, last run). AGENTS.md: its version line was months stale (9.2.3, kernel 7.0.6) and is now current; the rest of AGENTS.md still lags CLAUDE.md.
+
 ## 2026-11-19
 
 **Open-thread cleanup, and the dual-review `missing codex_final.md` retention change is PARKED.**
